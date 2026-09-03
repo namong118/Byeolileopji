@@ -1,0 +1,41 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  별일없지 — Firestore 보안 규칙  (Phase 2.5)
+//
+//  ⚠️  DEVELOPMENT ONLY — NOT FOR PRODUCTION
+//
+//  아직 Firebase Auth 를 구현하지 않았다. 이 규칙은 인증 없는 PoC 앱이
+//  events 를 읽고 쓸 수 있도록 열어둔 상태다.
+//  - 전체 DB 와일드카드(`match /{document=**}`) 는 쓰지 않는다.
+//  - 필요한 3개 컬렉션에만 범위를 제한한다.
+//  - events 외 컬렉션은 읽기만 허용한다(앱이 쓰지 않음).
+//
+//  Phase 4(인증 도입) 에서 아래처럼 좁힌다:
+//    allow read:  if isLinkedGuardian(resource.data.careRecipientId);
+//    allow write: if false;   // 쓰기는 서버(HTTPS endpoint)만
+// ═══════════════════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 생활 이벤트 — 앱이 생성/조회. Phase 3 에서는 서버가 생성.
+    match /events/{eventId} {
+      allow read: if true;   // DEVELOPMENT ONLY
+      allow create: if true; // DEVELOPMENT ONLY
+      allow update, delete: if false;
+    }
+
+    // 보호대상 — 조회만 (개발용 seed 는 Console 에서 수동 생성)
+    match /careRecipients/{careRecipientId} {
+      allow read: if true;   // DEVELOPMENT ONLY
+      allow write: if false;
+    }
+
+    // 디바이스 — 조회만 (Phase 3 준비용)
+    match /devices/{deviceId} {
+      allow read: if true;   // DEVELOPMENT ONLY
+      allow write: if false;
+    }
+  }
+}

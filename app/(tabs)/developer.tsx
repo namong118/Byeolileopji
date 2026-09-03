@@ -22,7 +22,7 @@ const STATUS_BUTTONS: { label: string; value: CareStatus }[] = [
 ];
 
 const DATA_SOURCE_LABEL: Record<string, string> = {
-  supabase: 'Supabase (영속 저장)',
+  firebase: 'Firebase Firestore (영속 저장)',
   memory: 'In-Memory (앱 종료 시 초기화)',
 };
 
@@ -31,6 +31,7 @@ export default function DeveloperScreen() {
   const setStatus = useCareStore((s) => s.setStatus);
   const status = useCareStore((s) => s.status);
   const dataSource = useCareStore((s) => s.dataSource);
+  const realtime = useCareStore((s) => s.realtime);
   const actionError = useCareStore((s) => s.actionError);
   const reload = useCareStore((s) => s.reload);
   const [lastLog, setLastLog] = useState<string>();
@@ -48,6 +49,9 @@ export default function DeveloperScreen() {
         <Text style={styles.sourceLabel}>Data Source</Text>
         <Text style={styles.sourceValue}>
           {DATA_SOURCE_LABEL[dataSource] ?? dataSource}
+        </Text>
+        <Text style={styles.sourceSub}>
+          실시간 구독 {realtime ? '연결됨' : '미사용'}
         </Text>
       </View>
 
@@ -138,6 +142,11 @@ const styles = StyleSheet.create({
   sourceValue: {
     ...typography.bodyStrong,
     color: colors.textPrimary,
+    marginTop: 2,
+  },
+  sourceSub: {
+    ...typography.caption,
+    color: colors.textSecondary,
     marginTop: 2,
   },
   grid: {

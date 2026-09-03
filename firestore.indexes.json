@@ -1,0 +1,14 @@
+{
+  "//": "별일없지 Firestore 복합 인덱스. events: careRecipientId(==) + occurredAt(desc) 쿼리에 필요.",
+  "indexes": [
+    {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "careRecipientId", "order": "ASCENDING" },
+        { "fieldPath": "occurredAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

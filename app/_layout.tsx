@@ -9,10 +9,12 @@ import { useCareStore } from '../src/stores/careStore';
 
 export default function RootLayout() {
   const init = useCareStore((s) => s.init);
+  const teardown = useCareStore((s) => s.teardown);
 
   useEffect(() => {
     void init();
-  }, [init]);
+    return () => teardown();
+  }, [init, teardown]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

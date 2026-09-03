@@ -36,6 +36,13 @@ yarn-error.*
 .env*.local
 !.env.example
 
+# Firebase secrets (Admin SDK / service account — Phase 3 서버 전용, 앱에는 넣지 않음)
+*serviceAccount*.json
+*-firebase-adminsdk-*.json
+google-services.json
+GoogleService-Info.plist
+.firebase/
+
 # typescript
 *.tsbuildinfo
 

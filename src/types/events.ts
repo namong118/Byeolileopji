@@ -1,7 +1,7 @@
 /**
  * 공통 생활 이벤트 모델.
  *
- * 향후 Supabase / ESP32-S3 / Wear OS 에서 들어오는 데이터도 모두
+ * 향후 Firestore / ESP32-S3 / Wear OS 에서 들어오는 데이터도 모두
  * 이 CareEvent 형태로 정규화되어 같은 파이프라인을 사용한다.
  */
 
@@ -23,9 +23,9 @@ export interface CareEvent {
   source: EventSource;
   /** 사람이 읽을 수 있는 위치 이름 (예: "거실"). 센서 이벤트에만 존재. */
   location?: string;
-  /** ISO 8601 문자열 (UTC). DB 는 timestamptz 로 저장한다. */
+  /** ISO 8601 문자열 (UTC). Firestore 는 Timestamp 로 저장한다. */
   occurredAt: string;
-  /** 어느 보호대상의 이벤트인지. Phase 2: 고정 개발용 ID. */
+  /** 어느 보호대상의 이벤트인지. Phase 2.5: 고정 개발용 ID. */
   careRecipientId?: string;
   /** 어느 디바이스에서 왔는지(센서/워치). 없을 수 있음. */
   deviceId?: string;

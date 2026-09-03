@@ -4,21 +4,24 @@
  * UI 는 저장소를 직접 만지지 않고 항상 이 서비스를 통한다.
  *
  *   UI → careStore → EventService → EventRepository
- *                                    ├─ SupabaseEventRepository  (env 설정 시)
+ *                                    ├─ FirestoreEventRepository  (Firebase config 있을 때)
  *                                    └─ InMemoryEventRepository   (폴백)
  */
 
 import type { CareEvent, NewCareEvent } from '../types/events';
 import { isSameDay } from '../utils/time';
 import { createId } from '../utils/id';
+import { ACTIVITY_EVENT_TYPES } from './eventViews';
 import { DEV_CARE_RECIPIENT_ID } from '../config/careContext';
-import { isSupabaseConfigured } from '../config/env';
+import { isFirebaseConfigured } from '../config/env';
 import {
   InMemoryEventRepository,
   type EventRepository,
+  type EventsListener,
+  type Unsubscribe,
 } from './eventRepository';
-import { getSupabaseClient } from './supabase/client';
-import { SupabaseEventRepository } from './supabase/supabaseEventRepository';
+import { getFirestoreDb } from '../lib/firebase';
+import { FirestoreEventRepository } from './firestore/firestoreEventRepository';
 
 export class EventService {
   private readonly repo: EventRepository;
@@ -56,37 +59,45 @@ export class EventService {
   /** 가장 최근 "활동성" 이벤트 (홈의 마지막 활동 카드용) */
   async getLastActivity(): Promise<CareEvent | undefined> {
     const all = await this.repo.listEvents();
-    return all.find((e) => ACTIVITY_EVENTS.has(e.eventType));
+    return all.find((e) => ACTIVITY_EVENT_TYPES.has(e.eventType));
   }
 
   /** 개발용 목업 seed (InMemory 에서만 효과 있음) */
   async seed(events: CareEvent[]): Promise<void> {
     await this.repo.replaceAll(events);
   }
+
+  /** 저장소가 실시간 구독을 지원하는지 */
+  supportsRealtime(): boolean {
+    return typeof this.repo.subscribeToEvents === 'function';
+  }
+
+  /**
+   * 실시간 구독. 지원하지 않으면 undefined.
+   * listener 는 항상 "최신 우선 전체 목록" 을 받는다.
+   */
+  subscribeToEvents(listener: EventsListener): Unsubscribe | undefined {
+    return this.repo.subscribeToEvents?.(listener);
+  }
 }
 
-/** "마지막 활동"으로 간주할 이벤트 종류 */
-const ACTIVITY_EVENTS = new Set<CareEvent['eventType']>([
-  'motion_detected',
-  'door_opened',
-  'returned_home',
-  'left_home',
-  'watch_activity',
-  'medication_taken',
-]);
+/** 파생 뷰 로직은 `eventViews.ts` (순수) 에서 재노출한다. */
+export { deriveEventViews, type EventViews } from './eventViews';
 
-export type EventDataSource = 'supabase' | 'memory';
+export type EventDataSource = 'firebase' | 'memory';
 
 function createEventService(): {
   service: EventService;
   dataSource: EventDataSource;
 } {
-  if (isSupabaseConfigured()) {
-    const client = getSupabaseClient();
-    if (client) {
+  if (isFirebaseConfigured()) {
+    const db = getFirestoreDb();
+    if (db) {
       return {
-        service: new EventService(new SupabaseEventRepository(client)),
-        dataSource: 'supabase',
+        service: new EventService(
+          new FirestoreEventRepository(db, DEV_CARE_RECIPIENT_ID),
+        ),
+        dataSource: 'firebase',
       };
     }
   }
