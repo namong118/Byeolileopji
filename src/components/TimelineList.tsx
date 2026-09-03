@@ -20,7 +20,9 @@ export function TimelineList({
 }: TimelineListProps) {
   if (events.length === 0) {
     return (
-      <Text style={styles.empty}>아직 오늘 기록된 활동이 없어요.</Text>
+      <Text style={styles.empty}>
+        아직 오늘 기록이 없어요.{'\n'}활동이 확인되면 이곳에 표시됩니다.
+      </Text>
     );
   }
 

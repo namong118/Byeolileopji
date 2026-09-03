@@ -1,0 +1,8 @@
+# 별일없지 Supabase 설정 (최소 구성)
+# 전체 옵션: https://supabase.com/docs/guides/cli/config
+# `supabase init` 을 실행하면 이 파일이 완전한 형태로 재생성된다.
+
+project_id = "byeolileopji"
+
+[db]
+major_version = 15

@@ -8,6 +8,7 @@
 
 import type { CareEvent } from '../types/events';
 import { createId } from '../utils/id';
+import { DEV_CARE_RECIPIENT_ID, DEV_DEVICE_ID } from '../config/careContext';
 
 interface SeedSpec {
   minutesAgo: number;
@@ -41,6 +42,8 @@ export function buildSeedEvents(now: Date = new Date()): CareEvent[] {
       source: spec.source,
       location: spec.location,
       occurredAt: new Date(occurredMs).toISOString(),
+      careRecipientId: DEV_CARE_RECIPIENT_ID,
+      deviceId: spec.source === 'sensor' ? DEV_DEVICE_ID : undefined,
     };
   });
 

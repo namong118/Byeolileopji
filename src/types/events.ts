@@ -23,8 +23,12 @@ export interface CareEvent {
   source: EventSource;
   /** 사람이 읽을 수 있는 위치 이름 (예: "거실"). 센서 이벤트에만 존재. */
   location?: string;
-  /** ISO 8601 문자열. */
+  /** ISO 8601 문자열 (UTC). DB 는 timestamptz 로 저장한다. */
   occurredAt: string;
+  /** 어느 보호대상의 이벤트인지. Phase 2: 고정 개발용 ID. */
+  careRecipientId?: string;
+  /** 어느 디바이스에서 왔는지(센서/워치). 없을 수 있음. */
+  deviceId?: string;
   metadata?: Record<string, unknown>;
 }
 

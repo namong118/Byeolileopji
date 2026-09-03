@@ -3,11 +3,12 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import {
   Card,
+  Notice,
   PressableButton,
   ScreenScrollView,
   SectionHeader,
 } from '../../src/components';
-import { colors, spacing, typography } from '../../src/constants/theme';
+import { colors, radius, spacing, typography } from '../../src/constants/theme';
 import { SIMULATION_BUTTONS } from '../../src/mock/simulations';
 import { useCareStore } from '../../src/stores/careStore';
 import type { CareStatus } from '../../src/types/status';
@@ -20,11 +21,20 @@ const STATUS_BUTTONS: { label: string; value: CareStatus }[] = [
   { label: '긴급', value: 'EMERGENCY' },
 ];
 
+const DATA_SOURCE_LABEL: Record<string, string> = {
+  supabase: 'Supabase (영속 저장)',
+  memory: 'In-Memory (앱 종료 시 초기화)',
+};
+
 export default function DeveloperScreen() {
   const simulateEvent = useCareStore((s) => s.simulateEvent);
   const setStatus = useCareStore((s) => s.setStatus);
   const status = useCareStore((s) => s.status);
+  const dataSource = useCareStore((s) => s.dataSource);
+  const actionError = useCareStore((s) => s.actionError);
+  const reload = useCareStore((s) => s.reload);
   const [lastLog, setLastLog] = useState<string>();
+  const [detailError, setDetailError] = useState<string>();
 
   return (
     <ScreenScrollView>
@@ -34,6 +44,13 @@ export default function DeveloperScreen() {
         Production 빌드에서는 이 화면을 숨깁니다.
       </Text>
 
+      <View style={styles.sourceBadge}>
+        <Text style={styles.sourceLabel}>Data Source</Text>
+        <Text style={styles.sourceValue}>
+          {DATA_SOURCE_LABEL[dataSource] ?? dataSource}
+        </Text>
+      </View>
+
       <SectionHeader title="이벤트 발생" />
       <View style={styles.grid}>
         {SIMULATION_BUTTONS.map((btn) => (
@@ -42,17 +59,38 @@ export default function DeveloperScreen() {
             label={btn.label}
             style={styles.gridItem}
             onPress={async () => {
-              const input = btn.build();
-              const created = await simulateEvent(input);
-              setLastLog(
-                `${formatClock(created.occurredAt)} · ${
-                  presentEvent(created).shortMessage
-                }`,
-              );
+              setDetailError(undefined);
+              try {
+                const input = btn.build();
+                const created = await simulateEvent(input);
+                setLastLog(
+                  `${formatClock(created.occurredAt)} · ${
+                    presentEvent(created).shortMessage
+                  }`,
+                );
+              } catch (error) {
+                setDetailError(
+                  error instanceof Error ? error.message : String(error),
+                );
+              }
             }}
           />
         ))}
       </View>
+
+      {actionError ? (
+        <View style={styles.errorBlock}>
+          <Notice message={actionError} tone="error" />
+          {detailError ? (
+            <Text style={styles.detailError}>개발용 상세: {detailError}</Text>
+          ) : null}
+          <PressableButton
+            label="다시 불러오기"
+            onPress={() => void reload()}
+            style={styles.retry}
+          />
+        </View>
+      ) : null}
 
       <SectionHeader title="상태 변경" />
       <View style={styles.statusRow}>
@@ -87,6 +125,21 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: spacing.xs,
   },
+  sourceBadge: {
+    marginTop: spacing.lg,
+    padding: spacing.md,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceMuted,
+  },
+  sourceLabel: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  sourceValue: {
+    ...typography.bodyStrong,
+    color: colors.textPrimary,
+    marginTop: 2,
+  },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -95,6 +148,17 @@ const styles = StyleSheet.create({
   gridItem: {
     flexGrow: 1,
     flexBasis: '45%',
+  },
+  errorBlock: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  detailError: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  retry: {
+    alignSelf: 'flex-start',
   },
   statusRow: {
     flexDirection: 'row',

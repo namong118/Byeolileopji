@@ -1,4 +1,5 @@
 export { Card } from './Card';
+export { Notice } from './Notice';
 export { PressableButton } from './PressableButton';
 export { ScreenScrollView } from './ScreenScrollView';
 export { SectionHeader } from './SectionHeader';

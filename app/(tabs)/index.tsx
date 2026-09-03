@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 
 import {
   Card,
+  Notice,
   ScreenScrollView,
   SectionHeader,
   StatusHero,
@@ -23,6 +24,8 @@ export default function HomeScreen() {
   const todayEvents = useCareStore((s) => s.todayEvents);
   const events = useCareStore((s) => s.events);
   const lastActivity = useCareStore((s) => s.lastActivity);
+  const loading = useCareStore((s) => s.loading);
+  const loadError = useCareStore((s) => s.loadError);
 
   const summary = useMemo(
     () => buildHomeSummary(events, lastActivity),
@@ -44,6 +47,16 @@ export default function HomeScreen() {
       <View style={styles.heroWrap}>
         <StatusHero status={status} subtext={heroSubtext} />
       </View>
+
+      {loadError ? (
+        <View style={styles.banner}>
+          <Notice message={loadError} tone="error" />
+        </View>
+      ) : loading ? (
+        <View style={styles.banner}>
+          <Notice message="오늘의 기록을 불러오고 있어요." />
+        </View>
+      ) : null}
 
       <View style={styles.pairRow}>
         <Card style={styles.pairCard}>
@@ -112,6 +125,9 @@ const styles = StyleSheet.create({
   },
   heroWrap: {
     marginTop: spacing.lg,
+  },
+  banner: {
+    marginTop: spacing.md,
   },
   pairRow: {
     flexDirection: 'row',
