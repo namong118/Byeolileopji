@@ -37,9 +37,10 @@ Phase 1    ✅  Guardian App + Mock Event Pipeline
 Phase 2    ⏭️  Supabase Backend (구현했으나 hosted 검증 전 Firebase 로 전환)
 Phase 2.5  ✅  Firebase Firestore Persistence + Realtime (hosted 검증 완료)
 Phase 3    🚧  ESP32-S3 + PIR 센서 실연동
-              ├─ ✅  서버 ingest endpoint (Cloudflare Worker) + 앱 파이프라인
+              ├─ ✅  서버 ingest endpoint (Cloudflare Worker) — 배포 + curl → Firestore
+              │       → 앱 onSnapshot 실시간 반영까지 hosted 검증 완료
               ├─ ✅  ESP32 펌웨어 코드 + 배선/업로드 문서
-              └─ ⏳  실물 하드웨어(PIR/ESP32) end-to-end 검증  ← pending
+              └─ ⏳  실물 하드웨어(HC-SR501 PIR / ESP32-S3) end-to-end 검증  ← pending
 Phase 4    ⏳  NORMAL / CHECK 자동 판단 (무활동 시간 기반) + 보호자 인증/규칙
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
@@ -50,8 +51,12 @@ Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 > 반영은 **실제로 검증 완료**.
 >
 > **Phase 3 현황:** ESP32 가 Firestore 에 직접 쓰지 않고
-> `ESP32 → HTTPS → Cloudflare Worker → Firestore` 구조. Worker·펌웨어·문서·테스트는
-> 완료. **실물 센서 end-to-end 는 하드웨어 도착 후 검증** (상세: `firmware/esp32-pir/README.md`).
+> `ESP32 → HTTPS → Cloudflare Worker → Firestore` 구조.
+> **서버 파이프라인(배포 → `GET /health` → `X-Device-Key` 인증 → `POST /ingest-device-event`
+> HTTP 201 → `devices/dev-device-livingroom` 조회 → `events` 문서 생성 → Expo 앱
+> onSnapshot 실시간 반영)까지 hosted 검증 완료.**
+> **실물 센서(HC-SR501 PIR / ESP32-S3) end-to-end 는 하드웨어 도착 후 검증**
+> (상세: `firmware/esp32-pir/README.md`).
 
 ---
 
@@ -356,8 +361,8 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
 | `npm run test:smoke` | ✅ 11 + 23 통과 (앱 매핑/파생/폴백 11, endpoint 검증/변환/end-to-end 23) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
-| Phase 3 endpoint → Firestore → 앱 실시간 (curl 테스트) | ⏳ Worker 배포 후 검증 (`server/cloudflare-worker/README.md`) |
-| Phase 3 실물 PIR/ESP32 end-to-end | ⏳ 하드웨어 도착 후 (`firmware/esp32-pir/README.md`) |
+| Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
+| Phase 3 실물 PIR/ESP32 end-to-end (사람 움직임 → 앱) | ⏳ 하드웨어 도착 후 (`firmware/esp32-pir/README.md`) |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
 순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증)를 검증하고, 화면 로직은 typecheck +
@@ -495,14 +500,17 @@ Invoke-RestMethod -Method Post -Uri "https://<worker>.workers.dev/ingest-device-
 Phase 4 에서: Firebase Auth, `events` write 는 서버(service account OAuth)만,
 per-device key + 서명 검증, rate limiting, CA 핀 고정.
 
-### Hardware Validation Status
+### Validation Status
 
 | 항목 | 상태 |
 | --- | --- |
 | 서버 endpoint 코드 + 검증 로직 + 스모크 테스트 | ✅ 완료 |
 | ESP32 펌웨어 코드 (Wi-Fi 재연결 / 상승 에지 / 쿨다운 / 재시도) | ✅ 완료 |
 | 배선 · 업로드 · 트러블슈팅 문서 | ✅ 완료 |
-| Worker 실제 배포 + curl → Firestore → 앱 실시간 | ⏳ 사용자 배포 후 |
+| Cloudflare Worker 배포 + `GET /health` | ✅ **hosted 검증 완료** |
+| `X-Device-Key` 인증 + `POST /ingest-device-event` → HTTP 201 | ✅ **hosted 검증 완료** |
+| `devices/dev-device-livingroom` 조회 + `events` 문서 생성 | ✅ **hosted 검증 완료** |
+| Expo 앱 `onSnapshot` 실시간 반영 (endpoint 발 이벤트) | ✅ **hosted 검증 완료** |
 | 실물 HC-SR501 HIGH 감지 | ⏳ 하드웨어 대기 |
 | ESP32 실기기 POST / Wi-Fi 재연결 | ⏳ 하드웨어 대기 |
 | 사람 움직임 → 앱 "거실에서 활동이 확인됐어요" end-to-end | ⏳ 하드웨어 대기 |

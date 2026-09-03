@@ -6,6 +6,11 @@ ESP32-S3  →  HTTPS POST /ingest-device-event  →  이 Worker  →  Firestore 
                                                                 별일없지 App
 ```
 
+> **hosted 검증 완료:** Worker 배포 · `GET /health` · `X-Device-Key` 인증 ·
+> `POST /ingest-device-event` → HTTP 201 · `devices/dev-device-livingroom` 조회 ·
+> `events` 문서 생성 · Expo 앱 `onSnapshot` 실시간 반영까지 실제 확인됨.
+> 남은 것은 실물 ESP32/PIR 하드웨어 E2E (`../../firmware/esp32-pir/README.md`).
+
 ## 왜 Cloudflare Workers 인가
 
 - **Firebase Cloud Functions 는 2024년 10월부터 배포에 Blaze(종량제/결제) 플랜이 필요하다.**
