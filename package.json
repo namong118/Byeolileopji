@@ -31,7 +31,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "test:smoke": "node scripts/phase25-smoke.mjs"
+    "test:smoke": "node scripts/phase25-smoke.mjs && node scripts/phase3-endpoint-smoke.mjs"
   },
   "private": true
 }

@@ -1,0 +1,16 @@
+{
+  "name": "byeolileopji-ingest-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "별일없지 디바이스 이벤트 ingest endpoint (Cloudflare Workers)",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

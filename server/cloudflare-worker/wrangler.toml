@@ -1,0 +1,17 @@
+# 별일없지 ingest Worker — Cloudflare Workers 설정
+# 배포:  npx wrangler deploy   (무료 플랜에서 <name>.<subdomain>.workers.dev 로 게시)
+
+name = "byeolileopji-ingest"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# 비밀 아님 → vars 로 둔다 (앱의 공개 firebaseConfig 에도 있는 값)
+[vars]
+FIREBASE_PROJECT_ID = "byeolileopji"
+# FIREBASE_API_KEY 는 선택 (쿼터 귀속용). 넣으려면 아래 주석 해제:
+# FIREBASE_API_KEY = ""
+
+# 비밀은 vars 에 두지 않는다. 아래 명령으로 등록한다:
+#   npx wrangler secret put DEVICE_KEY
+#
+# 로컬 개발(`wrangler dev`)에서는 .dev.vars 파일을 사용한다 (.gitignore 처리됨).

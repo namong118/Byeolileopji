@@ -1,0 +1,8 @@
+# 실제 비밀 값 — 절대 커밋 금지
+secrets.h
+
+# Arduino / PlatformIO 빌드 산출물
+build/
+.pio/
+*.bin
+*.elf

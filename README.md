@@ -35,19 +35,23 @@ Smart Watch
 ```text
 Phase 1    ✅  Guardian App + Mock Event Pipeline
 Phase 2    ⏭️  Supabase Backend (구현했으나 hosted 검증 전 Firebase 로 전환)
-Phase 2.5  ✅  Firebase Firestore Persistence + Realtime   ← 현재
-Phase 3    ⏳  ESP32-S3 + PIR 센서 실연동
+Phase 2.5  ✅  Firebase Firestore Persistence + Realtime (hosted 검증 완료)
+Phase 3    🚧  ESP32-S3 + PIR 센서 실연동
+              ├─ ✅  서버 ingest endpoint (Cloudflare Worker) + 앱 파이프라인
+              ├─ ✅  ESP32 펌웨어 코드 + 배선/업로드 문서
+              └─ ⏳  실물 하드웨어(PIR/ESP32) end-to-end 검증  ← pending
 Phase 4    ⏳  NORMAL / CHECK 자동 판단 (무활동 시간 기반) + 보호자 인증/규칙
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
 
-> **Phase 2 → 2.5 전환:** Phase 2 에서 Supabase 연동 코드를 작성했으나
-> 실제 hosted 프로젝트 검증 전에 **Firebase Firestore 로 백엔드를 전환**했다.
-> Supabase 코드/마이그레이션은 제거됐다 (git history `c8392af` 에 남아 있음).
+> **Phase 2 → 2.5 전환:** Supabase 연동 코드를 작성했으나 hosted 검증 전
+> **Firebase Firestore 로 백엔드를 전환**했다. Supabase 코드는 제거됨 (git `c8392af`).
+> Phase 2.5 의 hosted Firestore WRITE / READ / 재시작 persistence / 외부 문서 → 앱 실시간
+> 반영은 **실제로 검증 완료**.
 >
-> Phase 2.5 는 앱 코드·Firestore 규칙·인덱스까지 완료됐다.
-> 실제 Firebase 프로젝트에 연결하려면 아래 **Firebase Console Setup** 을 따른다.
-> Firebase 환경변수가 없으면 앱은 자동으로 In-Memory 목업 모드로 동작한다.
+> **Phase 3 현황:** ESP32 가 Firestore 에 직접 쓰지 않고
+> `ESP32 → HTTPS → Cloudflare Worker → Firestore` 구조. Worker·펌웨어·문서·테스트는
+> 완료. **실물 센서 end-to-end 는 하드웨어 도착 후 검증** (상세: `firmware/esp32-pir/README.md`).
 
 ---
 
@@ -297,7 +301,19 @@ src/
 firebase.json                Firestore 배포 설정
 firestore.rules              보안 규칙 (DEVELOPMENT ONLY)
 firestore.indexes.json       복합 인덱스 정의
-scripts/phase25-smoke.mjs    순수 매핑/파생/폴백 스모크 테스트
+
+server/cloudflare-worker/    디바이스 이벤트 ingest endpoint (Phase 3)
+  src/validate.js            요청/디바이스 검증 (순수)
+  src/buildEvent.js          events 문서 생성 로직 (순수, 서버 timestamp)
+  src/firestore.js           Firestore REST 헬퍼 (인증 없음 — DEVELOPMENT ONLY)
+  src/index.js               Worker fetch 핸들러
+  wrangler.toml / README.md
+
+firmware/esp32-pir/          ESP32-S3 + HC-SR501 PIR 펌웨어 (Phase 3)
+  esp32-pir.ino / config.h / secrets.example.h / README.md
+
+scripts/phase25-smoke.mjs        앱 매핑/파생/폴백 스모크
+scripts/phase3-endpoint-smoke.mjs endpoint 검증/변환/end-to-end 스모크
 ```
 
 UI 에는 기술 용어(PIR, `motion_detected`, Firestore 등)를 노출하지 않고
@@ -338,41 +354,164 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run lint` | ✅ 통과 |
 | `npx expo-doctor` | ✅ 21/21 |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11/11 — Timestamp 변환 · 문서↔CareEvent 매핑 · null/enum 안전 · round-trip · deriveEventViews(정렬/오늘/마지막활동) · InMemory 폴백 · eventPresenter |
-| **실제 hosted Firestore INSERT / READ / realtime** | ⚠️ **미검증** — 이 저장소에 Firebase credential 이 없음. 위 **Firebase Console Setup** 후 사용자가 검증 필요 |
+| `npm run test:smoke` | ✅ 11 + 23 통과 (앱 매핑/파생/폴백 11, endpoint 검증/변환/end-to-end 23) |
+| Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
+| Phase 3 endpoint → Firestore → 앱 실시간 (curl 테스트) | ⏳ Worker 배포 후 검증 (`server/cloudflare-worker/README.md`) |
+| Phase 3 실물 PIR/ESP32 end-to-end | ⏳ 하드웨어 도착 후 (`firmware/esp32-pir/README.md`) |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
-순수 함수(매핑·타임스탬프·파생·폴백)를 검증하고, 화면 로직은 typecheck + Metro 번들로 커버한다.
-Phase 4(자동 판단 로직)에서 규칙이 복잡해지면 jest 도입을 재검토한다.
+순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증)를 검증하고, 화면 로직은 typecheck +
+Metro 번들로 커버한다. Phase 4(자동 판단 로직)에서 규칙이 복잡해지면 jest 도입을 재검토한다.
 
 ---
 
-## Phase 3 Hardware Plan
+## Phase 3 — ESP32 PIR Device Pipeline
+
+### Architecture
 
 ```text
-PIR 센서 감지
-  → ESP32-S3 (디바운스)
-  → Wi-Fi (2.4GHz)
-  → HTTPS POST  /ingest  { deviceId, eventType, occurredAt }
-  → (서버) 디바이스 검증 + careRecipientId/location 결정
-  → Firestore events.add(...)
-  → onSnapshot
-  → 별일없지 App
+사람 움직임
+  → HC-SR501 PIR
+  → ESP32-S3           (상승 에지 감지 + 쿨다운, Wi-Fi)
+  → HTTPS POST         { deviceId, eventType }  + X-Device-Key
+  → Cloudflare Worker  /ingest-device-event
+       ├─ X-Device-Key 검증
+       ├─ Firestore devices/{deviceId} 조회 (존재 / enabled / type / eventType 허용)
+       └─ Firestore events 문서 생성
+            careRecipientId / location  ← devices 레지스트리
+            source = "sensor",  payload.origin = "esp32"
+            occurredAt / createdAt      ← 서버 시각 (ESP32 시계 무시)
+  → Firestore events
+  → onSnapshot  (앱의 단일 realtime listener, Phase 2.5 그대로)
+  → careStore → Home / Timeline
   → "거실에서 활동이 확인됐어요."
 ```
 
-- ESP32 는 Firestore 에 **직접 admin 접근하지 않는다.** HTTPS endpoint 경유.
-- endpoint 구현체(Cloud Functions / Cloud Run / 별도 서버)는 Phase 3 에서 결정.
-- 이번 Phase 2.5 에서는 endpoint 를 구현하지 않는다. 앱 쪽 저장/조회/실시간만 완성.
+**ESP32 는 Firestore 에 직접 쓰지 않는다.** Firebase Admin SDK / service account /
+private key 를 펌웨어·앱 어디에도 넣지 않는다.
 
-준비물: ESP32-S3 보드, PIR 모듈(HC-SR501 등), USB-C 데이터 케이블,
-2.4GHz Wi-Fi, Arduino IDE 또는 PlatformIO.
+### 왜 Cloudflare Worker 인가 (비용)
+
+- **Firebase Cloud Functions 는 2024-10 부터 배포에 Blaze(종량제) 플랜 필요** → Spark(무료)에서 불가.
+- **Cloudflare Workers Free**: 하루 10만 요청, HTTPS, `*.workers.dev` 무료 도메인 → **결제 등록 없이** PoC 가능.
+- Worker 는 Phase 2.5 개발용 규칙(`events` create / `devices` read 가 `if true`)에 기대어
+  **Firestore REST API 를 인증 없이** 호출한다 (service account 불필요). **DEVELOPMENT ONLY.**
+
+### Hardware List
+
+| 부품 | 비고 |
+| --- | --- |
+| ESP32-S3 DevKitC-1 (N16R8 등) | USB-C **데이터** 케이블 |
+| HC-SR501 PIR 모션센서 | 전원 후 ~60초 워밍업 |
+| 2.4GHz Wi-Fi | ESP32 5GHz 미지원 |
+| 점퍼선 3개 | |
+
+### PIR Wiring
+
+| HC-SR501 | ESP32-S3 |
+| --- | --- |
+| VCC | 5V |
+| GND | GND |
+| OUT | GPIO4 (`firmware/esp32-pir/config.h` 의 `PIR_PIN`) |
+
+HC-SR501 OUT 은 ~3.3V 로짜 → ESP32-S3 3.3V 입력에 직결 가능.
+피해야 할 GPIO: 0/3/45/46(스트래핑), 19/20(USB-JTAG), 26~32(플래시), 33~37(옥탈 PSRAM), 43/44(Serial).
+자세한 배선·업로드·트러블슈팅: **`firmware/esp32-pir/README.md`**
+
+### Device Registry (Firebase Console 에서 수동 생성)
+
+Firestore 에 컬렉션 `devices`, 문서 ID `dev-device-livingroom`:
+
+| 필드 | 값 |
+| --- | --- |
+| `careRecipientId` | `dev-care-recipient` (string) |
+| `name` | `거실 센서` (string) |
+| `type` | `ESP32_PIR` (string) |
+| `location` | `거실` (string) |
+| `enabled` | `true` (boolean) |
+
+> ⚠️ **device key(`DEVICE_KEY`) 를 devices 문서에 저장하지 않는다.**
+> 앱이 개발용 규칙으로 `devices` 를 read 할 수 있어 노출된다.
+> 키는 Cloudflare Worker 의 secret 에만 둔다.
+
+### Device Event API
+
+`POST https://<worker>.workers.dev/ingest-device-event`
+Headers: `Content-Type: application/json`, `X-Device-Key: <DEVICE_KEY>`
+Body: `{ "deviceId": "dev-device-livingroom", "eventType": "motion_detected" }`
+
+`eventType` 은 앱 `CareEvent.eventType` 과 **동일한 소문자 snake_case**
+(`motion_detected` 등). 새 대문자 enum 없음.
+전체 응답 코드/에러: **`server/cloudflare-worker/README.md`**
+
+### 서버 배포 (사람이 직접)
+
+```bash
+cd server/cloudflare-worker
+npm install
+npx wrangler login                       # 무료 계정
+npx wrangler secret put DEVICE_KEY       # 긴 무작위 문자열 (예: openssl rand -hex 24)
+# wrangler.toml 의 FIREBASE_PROJECT_ID 확인
+npx wrangler deploy                      # https://byeolileopji-ingest.<sub>.workers.dev
+```
+
+### HTTPS Test (하드웨어 없이)
+
+```bash
+curl -i -X POST "https://<worker>.workers.dev/ingest-device-event" \
+  -H "Content-Type: application/json" -H "X-Device-Key: <KEY>" \
+  -d '{"deviceId":"dev-device-livingroom","eventType":"motion_detected"}'
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "https://<worker>.workers.dev/ingest-device-event" `
+  -ContentType "application/json" -Headers @{ "X-Device-Key" = "<KEY>" } `
+  -Body '{"deviceId":"dev-device-livingroom","eventType":"motion_detected"}'
+```
+
+→ `201` + `eventId` → 앱 홈/타임라인에 몇 초 내 "거실에서 활동이 확인됐어요." 자동 표시.
+
+### 펌웨어 (사람이 직접)
+
+1. `firmware/esp32-pir/secrets.example.h` → `secrets.h` 로 복사, 값 채우기
+   (`WIFI_*`, `DEVICE_ID`, `DEVICE_KEY`, `INGEST_URL`)
+2. Arduino IDE: 보드 **ESP32S3 Dev Module**, USB CDC On Boot **Enabled**
+3. `esp32-pir.ino` 업로드 → Serial Monitor 115200
+4. PIR 앞에서 움직임 → `[PIR] motion detected` → `[HTTP] 201` → 앱 반영
+
+### Security Warning (Phase 3, DEVELOPMENT / POC)
+
+현재 PoC 는 **production-ready security 가 아니다.** 부족한 것:
+
+- user authentication / guardian authorization
+- production device identity / secure provisioning / key rotation
+- rate limiting / replay protection
+- Firestore 규칙이 여전히 `events` create 를 무인증 허용 (Developer Simulation 유지 목적)
+- Worker 가 Firestore 에 인증 없이 write (개발용 규칙 의존)
+- ESP32 HTTPS 인증서 검증 생략 (`client.setInsecure()`)
+
+Phase 4 에서: Firebase Auth, `events` write 는 서버(service account OAuth)만,
+per-device key + 서명 검증, rate limiting, CA 핀 고정.
+
+### Hardware Validation Status
+
+| 항목 | 상태 |
+| --- | --- |
+| 서버 endpoint 코드 + 검증 로직 + 스모크 테스트 | ✅ 완료 |
+| ESP32 펌웨어 코드 (Wi-Fi 재연결 / 상승 에지 / 쿨다운 / 재시도) | ✅ 완료 |
+| 배선 · 업로드 · 트러블슈팅 문서 | ✅ 완료 |
+| Worker 실제 배포 + curl → Firestore → 앱 실시간 | ⏳ 사용자 배포 후 |
+| 실물 HC-SR501 HIGH 감지 | ⏳ 하드웨어 대기 |
+| ESP32 실기기 POST / Wi-Fi 재연결 | ⏳ 하드웨어 대기 |
+| 사람 움직임 → 앱 "거실에서 활동이 확인됐어요" end-to-end | ⏳ 하드웨어 대기 |
 
 ---
 
-## 이번 Phase 에서 구현하지 않은 것
+## 이번 Phase(3) 에서 구현하지 않은 것
 
-로그인 UI / OAuth · Firebase Auth · ESP32 펌웨어 · HTTPS ingest endpoint ·
-Cloud Functions · PIR 센서 · MQTT · Galaxy Watch · Wear OS 앱 · GPS ·
+로그인 UI / OAuth · Firebase Auth · 실물 하드웨어 검증 · service account 기반 서버 인증 ·
+per-device key · Cloud Functions · MQTT · Galaxy Watch · Wear OS 앱 · GPS ·
 푸시 알림 · 실제 복약 알림 · AI / ML · 무활동 자동 판단 · 119 자동 신고 ·
 관리자 페이지 · 결제 · 여러 보호대상 전환 UI

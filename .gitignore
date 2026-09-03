@@ -43,6 +43,13 @@ google-services.json
 GoogleService-Info.plist
 .firebase/
 
+# Phase 3 디바이스/서버 비밀
+secrets.h
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.wrangler/
+
 # typescript
 *.tsbuildinfo
 
