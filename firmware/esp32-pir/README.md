@@ -6,6 +6,21 @@
   → onSnapshot → 별일없지 앱 → "거실에서 활동이 확인됐어요."
 ```
 
+## 검증 상태
+
+| 구간 | 상태 |
+| --- | --- |
+| ESP32-S3 DevKitC-1 실기기 인식 + 펌웨어 업로드 | ✅ 실기기 검증 완료 |
+| ESP32-S3 → 2.4GHz Wi-Fi 연결 | ✅ 실기기 검증 완료 |
+| ESP32-S3 → Cloudflare Worker HTTPS POST + `X-Device-Key` 인증 → HTTP 201 | ✅ 실기기 검증 완료 |
+| Worker → Firestore `events` 생성 → Expo 앱 `onSnapshot` 실시간 반영 ("방금 · 거실") | ✅ 실기기 검증 완료 |
+| 사람 움직임 → HC-SR501 PIR → GPIO4 → ESP32-S3 | ⏳ **pending** (PIR 센서/브레드보드 미도착) |
+
+> 네트워크 E2E 는 현재 `esp32-pir.ino` 의 `setup()` 에 있는 **TEMP TEST 블록**
+> (`[TEST]` 로그, 부팅당 `motion_detected` 1회 전송) 으로 검증했다.
+> **PIR 센서가 도착하면 이 블록을 제거**하고, 배선(VCC-5V / GND-GND / OUT-GPIO4) 후
+> 실제 상승 에지 → `handlePir()` 경로로 재검증한다.
+
 ## 하드웨어
 
 | 부품 | 비고 |

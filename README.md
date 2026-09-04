@@ -39,8 +39,9 @@ Phase 2.5  ✅  Firebase Firestore Persistence + Realtime (hosted 검증 완료)
 Phase 3    🚧  ESP32-S3 + PIR 센서 실연동
               ├─ ✅  서버 ingest endpoint (Cloudflare Worker) — 배포 + curl → Firestore
               │       → 앱 onSnapshot 실시간 반영까지 hosted 검증 완료
-              ├─ ✅  ESP32 펌웨어 코드 + 배선/업로드 문서
-              └─ ⏳  실물 하드웨어(HC-SR501 PIR / ESP32-S3) end-to-end 검증  ← pending
+              ├─ ✅  ESP32-S3 실기기 네트워크 E2E 검증 완료
+              │       (실기기 업로드 → Wi-Fi → HTTPS → Worker → 인증 → Firestore → 앱 실시간)
+              └─ ⏳  HC-SR501 PIR → GPIO4 → ESP32 실물 센서 E2E 검증  ← pending (센서 미도착)
 Phase 4    ⏳  NORMAL / CHECK 자동 판단 (무활동 시간 기반) + 보호자 인증/규칙
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
@@ -52,11 +53,16 @@ Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 >
 > **Phase 3 현황:** ESP32 가 Firestore 에 직접 쓰지 않고
 > `ESP32 → HTTPS → Cloudflare Worker → Firestore` 구조.
-> **서버 파이프라인(배포 → `GET /health` → `X-Device-Key` 인증 → `POST /ingest-device-event`
-> HTTP 201 → `devices/dev-device-livingroom` 조회 → `events` 문서 생성 → Expo 앱
-> onSnapshot 실시간 반영)까지 hosted 검증 완료.**
-> **실물 센서(HC-SR501 PIR / ESP32-S3) end-to-end 는 하드웨어 도착 후 검증**
-> (상세: `firmware/esp32-pir/README.md`).
+>
+> **✅ ESP32-S3 실기기 네트워크 E2E 검증 완료** (실기기로 확인):
+> ESP32-S3 DevKitC-1 펌웨어 업로드 → 2.4GHz Wi-Fi 연결 → Cloudflare Worker 로 HTTPS POST →
+> `X-Device-Key` 인증 → `POST /ingest-device-event` HTTP 201 → `events` 문서 생성 →
+> Expo 앱 `onSnapshot` 실시간 반영 (앱에 "방금 · 거실" 활동 표시).
+> (센서가 아직 없어 `esp32-pir.ino` 의 `setup()` 에 있는 TEMP TEST 블록이
+> `motion_detected` 를 부팅당 1회 전송하는 방식으로 검증.)
+>
+> **⏳ pending:** `사람 움직임 → HC-SR501 PIR → GPIO4 → ESP32-S3` 구간.
+> PIR 센서/브레드보드 미도착. (상세: `firmware/esp32-pir/README.md`)
 
 ---
 
@@ -362,7 +368,8 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run test:smoke` | ✅ 11 + 23 통과 (앱 매핑/파생/폴백 11, endpoint 검증/변환/end-to-end 23) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
-| Phase 3 실물 PIR/ESP32 end-to-end (사람 움직임 → 앱) | ⏳ 하드웨어 도착 후 (`firmware/esp32-pir/README.md`) |
+| Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
+| Phase 3 실물 PIR (사람 움직임 → HC-SR501 → GPIO4 → ESP32) | ⏳ 센서 도착 후 (`firmware/esp32-pir/README.md`) |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
 순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증)를 검증하고, 화면 로직은 typecheck +
@@ -511,15 +518,18 @@ per-device key + 서명 검증, rate limiting, CA 핀 고정.
 | `X-Device-Key` 인증 + `POST /ingest-device-event` → HTTP 201 | ✅ **hosted 검증 완료** |
 | `devices/dev-device-livingroom` 조회 + `events` 문서 생성 | ✅ **hosted 검증 완료** |
 | Expo 앱 `onSnapshot` 실시간 반영 (endpoint 발 이벤트) | ✅ **hosted 검증 완료** |
-| 실물 HC-SR501 HIGH 감지 | ⏳ 하드웨어 대기 |
-| ESP32 실기기 POST / Wi-Fi 재연결 | ⏳ 하드웨어 대기 |
-| 사람 움직임 → 앱 "거실에서 활동이 확인됐어요" end-to-end | ⏳ 하드웨어 대기 |
+| **ESP32-S3 DevKitC-1 실기기** 펌웨어 업로드 | ✅ **실기기 검증 완료** |
+| **ESP32-S3 → 2.4GHz Wi-Fi 연결** | ✅ **실기기 검증 완료** |
+| **ESP32-S3 → Worker HTTPS POST + `X-Device-Key` 인증 → HTTP 201** | ✅ **실기기 검증 완료** |
+| **ESP32-S3 발 이벤트 → Firestore → Expo 앱 실시간 반영** ("방금 · 거실") | ✅ **실기기 검증 완료** |
+| 실물 HC-SR501 PIR HIGH 감지 (GPIO4) | ⏳ 센서 대기 |
+| 사람 움직임 → HC-SR501 → ESP32 → 앱 "거실에서 활동이 확인됐어요" end-to-end | ⏳ 센서 대기 |
 
 ---
 
 ## 이번 Phase(3) 에서 구현하지 않은 것
 
-로그인 UI / OAuth · Firebase Auth · 실물 하드웨어 검증 · service account 기반 서버 인증 ·
-per-device key · Cloud Functions · MQTT · Galaxy Watch · Wear OS 앱 · GPS ·
-푸시 알림 · 실제 복약 알림 · AI / ML · 무활동 자동 판단 · 119 자동 신고 ·
-관리자 페이지 · 결제 · 여러 보호대상 전환 UI
+로그인 UI / OAuth · Firebase Auth · HC-SR501 PIR 실물 센서 E2E (센서 미도착) ·
+service account 기반 서버 인증 · per-device key · Cloud Functions · MQTT ·
+Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · AI / ML ·
+무활동 자동 판단 · 119 자동 신고 · 관리자 페이지 · 결제 · 여러 보호대상 전환 UI

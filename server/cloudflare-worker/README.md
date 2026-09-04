@@ -9,7 +9,8 @@ ESP32-S3  →  HTTPS POST /ingest-device-event  →  이 Worker  →  Firestore 
 > **hosted 검증 완료:** Worker 배포 · `GET /health` · `X-Device-Key` 인증 ·
 > `POST /ingest-device-event` → HTTP 201 · `devices/dev-device-livingroom` 조회 ·
 > `events` 문서 생성 · Expo 앱 `onSnapshot` 실시간 반영까지 실제 확인됨.
-> 남은 것은 실물 ESP32/PIR 하드웨어 E2E (`../../firmware/esp32-pir/README.md`).
+> **실물 ESP32-S3 DevKitC-1 에서도 확인됨** (실기기 Wi-Fi → 이 Worker → 인증 → Firestore → 앱).
+> 남은 것은 HC-SR501 PIR → GPIO4 → ESP32 구간 (`../../firmware/esp32-pir/README.md`).
 
 ## 왜 Cloudflare Workers 인가
 

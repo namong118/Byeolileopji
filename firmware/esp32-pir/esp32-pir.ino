@@ -160,6 +160,22 @@ void setup() {
 
   wifiConnect();
   Serial.printf("[PIR] warming up %lus ...\n", PIR_WARMUP_MS / 1000);
+
+  // ─── TEMP TEST — 센서 없이 ESP32-S3 → Wi-Fi → Worker → Firestore → 앱 E2E 검증 ───
+  // 검증이 끝나면 이 블록만 제거한다. 부팅당 정확히 1회만 실행된다(setup()).
+  Serial.printf("[TEST] wifi status after connect: %s\n",
+                WiFi.status() == WL_CONNECTED ? "connected" : "not connected");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("[TEST] local ip: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("[TEST] sending one motion_detected event ...");
+    int testCode = postEvent("motion_detected");
+    Serial.printf("[TEST] test event result code: %d\n", testCode);
+  } else {
+    Serial.println("[TEST] wifi not connected — skipping test event");
+  }
+  // ─── /TEMP TEST ────────────────────────────────────────────────────────────────
 }
 
 void loop() {
