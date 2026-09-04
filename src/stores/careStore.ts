@@ -1,40 +1,42 @@
 /**
  * UI 가 구독하는 반응형 상태.
  *
- *   UI → careStore → EventService → EventRepository → (Firestore | InMemory)
+ *   UI → careStore → EventService / deviceRepo → Firestore | InMemory
  *
- * Firestore 모드에서는 앱 시작 시 실시간 구독을 한 번만 시작한다.
- * 외부(ESP32)에서 events 컬렉션에 문서가 추가되면 onSnapshot → careStore → 화면이 갱신된다.
+ * Phase 4.0 — 사람 축 자동 판정 (deriveCareStatus).
+ * Phase 4.1a — 기기 축(DeviceHealth)을 **완전히 독립된 두 번째 축**으로 추가한다.
+ *   - deriveCareStatus() (사람)  /  deriveDeviceHealth() (기기)  를 project() 에서 독립 계산
+ *   - 두 enum 을 합치지 않는다. 스토어에도 별도 필드 (careStatus / deviceHealth)
+ *   - 표시 경계(presentHome)에서만 조합해 Hero 문구 1개를 만든다
+ *   - ⚠️ heartbeat 가 없으므로 실제 데이터에서 deviceHealth 는 항상 'unknown'
  *
- * Phase 4.0 — 상태 자동 판정:
- *  - deriveEventViews(이벤트 스캔) + deriveCareStatus(판정 규칙)를 합성한다.
- *  - init / reload / onSnapshot / 저빈도 타이머 / AppState active 가 모두 같은
- *    project() 를 통과한다.
- *  - 저빈도 타이머는 메모리상 events 로만 재계산한다. Firestore read/write 없음.
- *  - 개발자 화면의 상태 버튼은 "임시 오버라이드"(TTL 有) 이며 만료되면 자동 판정으로 복귀한다.
+ * init / reload / onSnapshot(events) / onSnapshot(device) / 저빈도 타이머 / AppState active
+ * 가 모두 같은 project() 를 통과한다. 타이머 재계산은 Firestore I/O 없음.
  */
 
 import { AppState, type NativeEventSubscription } from 'react-native';
 import { create } from 'zustand';
 
 import type { CareEvent, NewCareEvent } from '../types/events';
-import type { CareStatus, CareStatusResult } from '../types/status';
+import type {
+  CareStatus,
+  CareStatusResult,
+  DeviceHealth,
+  DeviceHealthResult,
+} from '../types/status';
+import type { DeviceDoc } from '../types/device';
 import {
   deriveEventViews,
+  deviceRepo,
   EVENT_DATA_SOURCE,
   eventService,
   type EventDataSource,
 } from '../services/eventService';
 import type { Unsubscribe } from '../services/eventRepository';
-import {
-  deriveCareStatus,
-  applyStatusOverride,
-} from '../services/careStatus';
+import { deriveCareStatus, applyStatusOverride } from '../services/careStatus';
+import { deriveDeviceHealth } from '../services/deviceHealth';
 import { careStatusConfig } from '../config/careStatusConfig';
-import {
-  presentCareStatus,
-  type CareStatusText,
-} from '../utils/careStatusText';
+import { presentHome, type CareStatusText } from '../utils/careStatusText';
 import { buildSeedEvents } from '../mock/seedEvents';
 import { mockCareTarget, type CareTarget } from '../mock/careTarget';
 
@@ -50,14 +52,26 @@ interface DerivedSlice {
   todayEvents: CareEvent[];
   lastActivity?: CareEvent;
   lastSos?: CareEvent;
-  /** 순수 판정 결과 (오버라이드 미적용) — 개발자 화면 "derived status" */
+  /** 사람 축 순수 판정 결과 (오버라이드 미적용) */
   careStatus: CareStatusResult;
-  /** 화면에 실제로 보이는 상태 (오버라이드 적용) — 기존 코드 호환 필드명 */
+  /** 기기 축 순수 판정 결과 (오버라이드 미적용) */
+  deviceHealth: DeviceHealthResult;
+  /** 화면에 실제로 보이는 사람 상태 (오버라이드 적용) — 기존 코드 호환 필드명 */
   status: CareStatus;
-  /** 홈 hero 표시용 톤/이모지/문구 (effective 기준) */
+  /** 홈 hero 표시용 톤/이모지/문구 (사람+기기 조합) */
   statusText: CareStatusText;
-  /** 오버라이드가 유효하면 그 값, 아니면 undefined (만료 시 자동 제거) */
+  /** 사람 상태 오버라이드가 유효하면 그 값 (만료 시 자동 제거) */
   statusOverride?: StatusOverride;
+}
+
+interface ProjectInput {
+  events: CareEvent[];
+  deviceDoc?: DeviceDoc;
+  now: Date;
+  statusOverride?: StatusOverride;
+  emergencyAckedAt?: number;
+  /** [개발용] 기기 축 자동 판정을 덮어쓴다 */
+  deviceHealthOverride?: DeviceHealth;
 }
 
 interface CareState extends DerivedSlice {
@@ -68,56 +82,68 @@ interface CareState extends DerivedSlice {
   dataSource: EventDataSource;
   realtime: boolean;
   careTarget: CareTarget;
-  /** 긴급 확인 시각 (epoch ms) — Phase 4.0 클라이언트 전용 */
   emergencyAckedAt?: number;
 
-  /** 앱 시작: 최초 로딩 + 실시간 구독 + 저빈도 재계산 타이머 + AppState 리스너 */
+  /** 원격 devices/{id} 문서 (Firestore 모드). 없으면 undefined. */
+  deviceDoc?: DeviceDoc;
+  /** [개발용] 기기 축 임시 오버라이드 */
+  deviceHealthOverride?: DeviceHealth;
+
   init: () => Promise<void>;
-  /** 저장소에서 다시 읽어와 화면 갱신 (수동 새로고침) */
   reload: () => Promise<void>;
-  /** I/O 없이 메모리상 events 로 상태만 재계산 (타이머 / AppState active) */
+  /** I/O 없이 메모리상 데이터로 상태만 재계산 (타이머 / AppState active) */
   refreshDerived: () => void;
-  /** 개발자 시뮬레이션에서 새 이벤트 발생 → 저장 → 갱신 */
   simulateEvent: (input: NewCareEvent) => Promise<CareEvent>;
-  /** [개발용] 상태를 임시로 덮어쓴다 (TTL 후 자동 판정 복귀) */
+  /** [개발용] 사람 상태를 임시로 덮어쓴다 (TTL 후 자동 판정 복귀) */
   setStatus: (status: CareStatus) => void;
-  /** [개발용] 임시 오버라이드 즉시 해제 → 자동 판정으로 복귀 */
+  /** [개발용] 사람 상태 임시 오버라이드 즉시 해제 */
   clearStatusOverride: () => void;
-  /** [개발용] EMERGENCY 확인 처리 (테스트용) */
+  /** [개발용] EMERGENCY 확인 처리 */
   acknowledgeEmergency: () => void;
-  /** 실시간 구독 / 타이머 / 리스너 해제 (앱 종료·언마운트 시) */
+  /** [개발용] 기기 축을 임시로 덮어쓴다. undefined 면 자동 판정 복귀. */
+  setDeviceHealthOverride: (health: DeviceHealth | undefined) => void;
   teardown: () => void;
 }
 
 // 스토어 밖에서 1개만 유지 (중복 방지)
 let realtimeUnsub: Unsubscribe | undefined;
+let deviceUnsub: Unsubscribe | undefined;
 let recomputeTimer: ReturnType<typeof setInterval> | undefined;
 let appStateSub: NativeEventSubscription | undefined;
 
-/** 이벤트 목록 → 파생 상태 (뷰 + 판정 + 오버라이드 적용). 순수. */
-function project(
-  events: CareEvent[],
-  now: Date,
-  override: StatusOverride | undefined,
-  emergencyAckedAt: number | undefined,
-): DerivedSlice {
-  const views = deriveEventViews(events, now);
+/** 이벤트 + 기기 문서 → 파생 상태 (두 축 독립 계산 + 표시 조합). 순수. */
+function project(input: ProjectInput): DerivedSlice {
+  const { events, deviceDoc, now } = input;
 
+  // ── 사람 축 ──────────────────────────────────────────────────────────
+  const views = deriveEventViews(events, now);
   const derived = deriveCareStatus({
     lastActivityAt: views.lastActivity?.occurredAt,
     lastSosAt: views.lastSos?.occurredAt,
     totalEventCount: views.events.length,
     config: careStatusConfig,
     now,
-    emergencyAckedAt,
+    emergencyAckedAt: input.emergencyAckedAt,
   });
-
-  const overrideActive = Boolean(override && override.until > now.getTime());
-  const effective = applyStatusOverride(
+  const overrideActive = Boolean(
+    input.statusOverride && input.statusOverride.until > now.getTime(),
+  );
+  const effectivePerson = applyStatusOverride(
     derived,
-    overrideActive ? override : undefined,
+    overrideActive ? input.statusOverride : undefined,
     now,
   );
+
+  // ── 기기 축 (독립) ───────────────────────────────────────────────────
+  const deviceHealth = deriveDeviceHealth({
+    deviceDocExists: Boolean(deviceDoc),
+    lastEventAt: deviceDoc?.lastEventAt,
+    lastHeartbeatAt: deviceDoc?.lastHeartbeatAt, // Phase 4.1a: 항상 undefined
+    config: careStatusConfig,
+    now,
+  });
+  const effectiveDeviceHealth: DeviceHealth =
+    input.deviceHealthOverride ?? deviceHealth.health;
 
   return {
     events: views.events,
@@ -125,14 +151,33 @@ function project(
     lastActivity: views.lastActivity,
     lastSos: views.lastSos,
     careStatus: derived,
-    status: effective.status,
-    statusText: presentCareStatus(effective, now),
-    statusOverride: overrideActive ? override : undefined,
+    deviceHealth,
+    status: effectivePerson.status,
+    statusText: presentHome(effectivePerson, effectiveDeviceHealth, now),
+    statusOverride: overrideActive ? input.statusOverride : undefined,
   };
 }
 
 async function loadEvents(): Promise<CareEvent[]> {
   return eventService.getEvents();
+}
+
+/** get() 에서 project 에 넘길 공통 입력을 뽑아낸다 */
+function projectInputFrom(
+  state: Pick<
+    CareState,
+    'events' | 'deviceDoc' | 'statusOverride' | 'emergencyAckedAt' | 'deviceHealthOverride'
+  >,
+  now: Date,
+): ProjectInput {
+  return {
+    events: state.events,
+    deviceDoc: state.deviceDoc,
+    now,
+    statusOverride: state.statusOverride,
+    emergencyAckedAt: state.emergencyAckedAt,
+    deviceHealthOverride: state.deviceHealthOverride,
+  };
 }
 
 export const useCareStore = create<CareState>((set, get) => ({
@@ -144,8 +189,10 @@ export const useCareStore = create<CareState>((set, get) => ({
   realtime: false,
   careTarget: mockCareTarget,
   emergencyAckedAt: undefined,
+  deviceDoc: undefined,
+  deviceHealthOverride: undefined,
 
-  ...project([], new Date(), undefined, undefined),
+  ...project({ events: [], now: new Date() }),
 
   init: async () => {
     set({ loading: true, loadError: undefined });
@@ -155,7 +202,7 @@ export const useCareStore = create<CareState>((set, get) => ({
       }
       const events = await loadEvents();
       set({
-        ...project(events, new Date(), get().statusOverride, get().emergencyAckedAt),
+        ...project(projectInputFrom({ ...get(), events }, new Date())),
         ready: true,
         loading: false,
       });
@@ -169,11 +216,11 @@ export const useCareStore = create<CareState>((set, get) => ({
       });
     }
 
-    // 실시간 구독 (최초 1회)
+    // events 실시간 구독 (최초 1회)
     if (!realtimeUnsub && eventService.supportsRealtime()) {
       realtimeUnsub = eventService.subscribeToEvents((events) => {
         set({
-          ...project(events, new Date(), get().statusOverride, get().emergencyAckedAt),
+          ...project(projectInputFrom({ ...get(), events }, new Date())),
           ready: true,
           loading: false,
         });
@@ -181,14 +228,24 @@ export const useCareStore = create<CareState>((set, get) => ({
       set({ realtime: Boolean(realtimeUnsub) });
     }
 
-    // 저빈도 재계산 타이머 (이벤트가 없어도 시간 경과로 NORMAL→CHECK)
+    // devices/{id} 문서 구독 (Firestore 모드, 최초 1회)
+    if (!deviceUnsub && deviceRepo) {
+      deviceUnsub = deviceRepo.subscribe((deviceDoc) => {
+        set({
+          deviceDoc,
+          ...project(projectInputFrom({ ...get(), deviceDoc }, new Date())),
+        });
+      });
+    }
+
+    // 저빈도 재계산 타이머 (이벤트/heartbeat 가 없어도 시간 경과 반영)
     if (!recomputeTimer) {
       recomputeTimer = setInterval(() => {
         get().refreshDerived();
       }, careStatusConfig.recomputeIntervalMs);
     }
 
-    // 포그라운드 복귀 시 즉시 1회 재계산 (백그라운드에서 타이머가 throttle 되므로)
+    // 포그라운드 복귀 시 즉시 1회 재계산
     if (!appStateSub) {
       appStateSub = AppState.addEventListener('change', (next) => {
         if (next === 'active') get().refreshDerived();
@@ -201,7 +258,7 @@ export const useCareStore = create<CareState>((set, get) => ({
     try {
       const events = await loadEvents();
       set({
-        ...project(events, new Date(), get().statusOverride, get().emergencyAckedAt),
+        ...project(projectInputFrom({ ...get(), events }, new Date())),
         loading: false,
       });
     } catch (error) {
@@ -215,20 +272,16 @@ export const useCareStore = create<CareState>((set, get) => ({
   },
 
   refreshDerived: () => {
-    const { events, statusOverride, emergencyAckedAt } = get();
-    set(project(events, new Date(), statusOverride, emergencyAckedAt));
+    set(project(projectInputFrom(get(), new Date())));
   },
 
   simulateEvent: async (input) => {
     set({ actionError: undefined });
     try {
       const created = await eventService.recordEvent(input);
-      // 저장 성공 후에만 갱신. 실시간 구독이 켜져 있으면 onSnapshot 이 곧 갱신.
       if (!get().realtime) {
         const events = await loadEvents();
-        set(
-          project(events, new Date(), get().statusOverride, get().emergencyAckedAt),
-        );
+        set(project(projectInputFrom({ ...get(), events }, new Date())));
       }
       return created;
     } catch (error) {
@@ -241,30 +294,43 @@ export const useCareStore = create<CareState>((set, get) => ({
   },
 
   setStatus: (status) => {
-    const override: StatusOverride = {
+    const statusOverride: StatusOverride = {
       status,
       until: Date.now() + careStatusConfig.overrideTtlMs,
     };
-    set(
-      project(get().events, new Date(), override, get().emergencyAckedAt),
-    );
+    set(project(projectInputFrom({ ...get(), statusOverride }, new Date())));
   },
 
   clearStatusOverride: () => {
-    set(project(get().events, new Date(), undefined, get().emergencyAckedAt));
+    set(
+      project(
+        projectInputFrom({ ...get(), statusOverride: undefined }, new Date()),
+      ),
+    );
   },
 
   acknowledgeEmergency: () => {
-    const ackedAt = Date.now();
+    const emergencyAckedAt = Date.now();
     set({
-      emergencyAckedAt: ackedAt,
-      ...project(get().events, new Date(), get().statusOverride, ackedAt),
+      emergencyAckedAt,
+      ...project(projectInputFrom({ ...get(), emergencyAckedAt }, new Date())),
+    });
+  },
+
+  setDeviceHealthOverride: (health) => {
+    set({
+      deviceHealthOverride: health,
+      ...project(
+        projectInputFrom({ ...get(), deviceHealthOverride: health }, new Date()),
+      ),
     });
   },
 
   teardown: () => {
     realtimeUnsub?.();
     realtimeUnsub = undefined;
+    deviceUnsub?.();
+    deviceUnsub = undefined;
     if (recomputeTimer) {
       clearInterval(recomputeTimer);
       recomputeTimer = undefined;

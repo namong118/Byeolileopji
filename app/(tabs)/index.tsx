@@ -25,11 +25,17 @@ export default function HomeScreen() {
   const lastActivity = useCareStore((s) => s.lastActivity);
   const loading = useCareStore((s) => s.loading);
   const loadError = useCareStore((s) => s.loadError);
+  const deviceHealth = useCareStore((s) => s.deviceHealth);
+  const deviceHealthOverride = useCareStore((s) => s.deviceHealthOverride);
 
   const summary = useMemo(
     () => buildHomeSummary(events, lastActivity),
     [events, lastActivity],
   );
+
+  // 기기 축이 offline 일 때만 별도 안내 (사람 축 Hero 와 독립).
+  // Phase 4.1a 실제 데이터에서는 heartbeat 가 없어 offline 이 나오지 않는다.
+  const effectiveDeviceHealth = deviceHealthOverride ?? deviceHealth.health;
 
   return (
     <ScreenScrollView>
@@ -55,6 +61,15 @@ export default function HomeScreen() {
       ) : loading ? (
         <View style={styles.banner}>
           <Notice message="오늘의 기록을 불러오고 있어요." />
+        </View>
+      ) : null}
+
+      {effectiveDeviceHealth === 'offline' ? (
+        <View style={styles.banner}>
+          <Notice
+            message="센서와 연결이 끊겼어요. 계속되면 직접 확인해 주세요."
+            tone="error"
+          />
         </View>
       ) : null}
 

@@ -12,7 +12,7 @@ import { colors, radius, spacing, typography } from '../../src/constants/theme';
 import { careStatusConfig } from '../../src/config/careStatusConfig';
 import { SIMULATION_BUTTONS } from '../../src/mock/simulations';
 import { useCareStore } from '../../src/stores/careStore';
-import type { CareStatus } from '../../src/types/status';
+import type { CareStatus, DeviceHealth } from '../../src/types/status';
 import { presentEvent } from '../../src/utils/eventPresenter';
 import { formatClock } from '../../src/utils/time';
 
@@ -20,6 +20,12 @@ const STATUS_BUTTONS: { label: string; value: CareStatus }[] = [
   { label: '정상', value: 'NORMAL' },
   { label: '확인 필요', value: 'CHECK' },
   { label: '긴급', value: 'EMERGENCY' },
+];
+
+const DEVICE_HEALTH_BUTTONS: { label: string; value: DeviceHealth }[] = [
+  { label: 'online', value: 'online' },
+  { label: 'offline', value: 'offline' },
+  { label: 'unknown', value: 'unknown' },
 ];
 
 const DATA_SOURCE_LABEL: Record<string, string> = {
@@ -37,9 +43,13 @@ export default function DeveloperScreen() {
   const setStatus = useCareStore((s) => s.setStatus);
   const clearStatusOverride = useCareStore((s) => s.clearStatusOverride);
   const acknowledgeEmergency = useCareStore((s) => s.acknowledgeEmergency);
+  const setDeviceHealthOverride = useCareStore((s) => s.setDeviceHealthOverride);
   const effectiveStatus = useCareStore((s) => s.status);
   const careStatus = useCareStore((s) => s.careStatus);
   const statusOverride = useCareStore((s) => s.statusOverride);
+  const deviceHealth = useCareStore((s) => s.deviceHealth);
+  const deviceHealthOverride = useCareStore((s) => s.deviceHealthOverride);
+  const deviceDoc = useCareStore((s) => s.deviceDoc);
   const dataSource = useCareStore((s) => s.dataSource);
   const realtime = useCareStore((s) => s.realtime);
   const actionError = useCareStore((s) => s.actionError);
@@ -48,6 +58,7 @@ export default function DeveloperScreen() {
   const [detailError, setDetailError] = useState<string>();
 
   const overrideActive = Boolean(statusOverride);
+  const effectiveDeviceHealth = deviceHealthOverride ?? deviceHealth.health;
 
   return (
     <ScreenScrollView>
@@ -67,8 +78,8 @@ export default function DeveloperScreen() {
         </Text>
       </View>
 
-      {/* ── 상태 판정 read-out ─────────────────────────────────────────── */}
-      <SectionHeader title="상태 판정 (자동)" />
+      {/* ── 사람 축 read-out ───────────────────────────────────────────── */}
+      <SectionHeader title="Care Status (사람 축)" />
       <Card>
         <Row
           k="effective status (화면 표시)"
@@ -84,18 +95,74 @@ export default function DeveloperScreen() {
               : String(careStatus.minutesSinceActivity)
           }
         />
-        <Row k="systemHealth" v={careStatus.systemHealth} />
+        <Row k="systemHealth (사람 데이터)" v={careStatus.systemHealth} />
         <Row k="lastActivityAt" v={fmtTime(careStatus.lastActivityAt)} />
         <Row k="emergencyEventAt" v={fmtTime(careStatus.emergencyEventAt)} />
         <Row k="computedAt" v={careStatus.computedAt} />
         <Row
           k="inactivity threshold (분)"
-          v={`${careStatusConfig.inactivityCheckMinutes}  (EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES 로 조정)`}
+          v={`${careStatusConfig.inactivityCheckMinutes}  (EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES)`}
           last
         />
       </Card>
       <Text style={styles.note}>
         위 임계값은 PoC/개발용 placeholder 이며 실제 안전 기준이 아닙니다.
+      </Text>
+
+      {/* ── 기기 축 read-out ───────────────────────────────────────────── */}
+      <SectionHeader title="Device Health (기기 축)" />
+      <Card>
+        <Row
+          k="effective health (화면 표시)"
+          v={`${effectiveDeviceHealth}${
+            deviceHealthOverride ? '  ← 임시 오버라이드' : ''
+          }`}
+        />
+        <Row k="derived health (실제 판정)" v={deviceHealth.health} />
+        <Row k="reason" v={deviceHealth.reason} />
+        <Row k="lastEventAt" v={fmtTime(deviceHealth.lastEventAt)} />
+        <Row k="lastHeartbeatAt" v={fmtTime(deviceHealth.lastHeartbeatAt)} />
+        <Row k="lastSeenAt" v={fmtTime(deviceHealth.lastSeenAt)} />
+        <Row
+          k="minutesSinceSeen"
+          v={
+            deviceHealth.minutesSinceSeen == null
+              ? '-'
+              : String(deviceHealth.minutesSinceSeen)
+          }
+        />
+        <Row k="computedAt" v={deviceHealth.computedAt} />
+        <Row
+          k="devices doc"
+          v={deviceDoc ? `${deviceDoc.id}` : '없음 (또는 In-Memory)'}
+          last
+        />
+      </Card>
+      <Text style={styles.note}>
+        Phase 4.1a: 아직 heartbeat 가 없어 실제 판정은 항상 unknown /
+        no_heartbeat_capability 입니다. (lastEventAt 이 오래돼도 offline 으로 판정하지
+        않습니다.) online/offline 실제 판정은 Phase 4.1b 에서 활성화됩니다.
+      </Text>
+      <View style={styles.statusRow}>
+        {DEVICE_HEALTH_BUTTONS.map((btn) => (
+          <PressableButton
+            key={btn.value}
+            label={btn.label}
+            variant={
+              deviceHealthOverride === btn.value ? 'solid' : 'outline'
+            }
+            style={styles.statusItem}
+            onPress={() => setDeviceHealthOverride(btn.value)}
+          />
+        ))}
+        <PressableButton
+          label="자동으로"
+          onPress={() => setDeviceHealthOverride(undefined)}
+          style={styles.statusItem}
+        />
+      </View>
+      <Text style={styles.note}>
+        위 버튼은 실제 자동 판정을 임시로 덮어씁니다 (개발용 — TTL 없음, [자동으로] 로 해제).
       </Text>
 
       {/* ── 이벤트 발생 ────────────────────────────────────────────────── */}

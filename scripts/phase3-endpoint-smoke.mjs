@@ -24,7 +24,6 @@ import {
   fromFirestoreFields,
   toFirestoreValue,
 } from '../server/cloudflare-worker/src/firestore.js';
-// index.js 도 import 해서 문법/모듈 그래프가 깨지지 않는지 확인
 import workerHandler from '../server/cloudflare-worker/src/index.js';
 
 import { docToCareEvent } from '../src/mappers/firestoreEventMapper.ts';
@@ -221,6 +220,97 @@ check('end-to-end: PIR 이벤트가 앱에서 "거실에서 활동이 확인됐�
 
 check('worker index.js: 핸들러 export 정상', () => {
   assert.equal(typeof workerHandler.fetch, 'function');
+});
+
+// ── Phase 4.1a: ingest 성공 시 devices/{id}.lastEventAt best-effort 갱신 ─
+//
+//   Firestore REST 를 fetch 로 흉내낸다:
+//     GET  /devices/{id}   → device 문서
+//     POST /events         → 생성된 문서
+//     PATCH /devices/{id}?updateMask.fieldPaths=lastEventAt → lastEventAt touch
+//
+function mockFirestore({ failTouch = false } = {}) {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    const method = opts.method || 'GET';
+    calls.push({ url: u, method });
+
+    if (u.includes('/devices/') && method === 'GET') {
+      return new Response(
+        JSON.stringify({
+          name: 'projects/p/databases/(default)/documents/devices/dev-device-livingroom',
+          fields: toFirestoreFields({
+            careRecipientId: 'dev-care-recipient',
+            name: '거실 센서',
+            type: 'ESP32_PIR',
+            location: '거실',
+            enabled: true,
+          }),
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    if (u.includes('/events') && method === 'POST') {
+      return new Response(
+        JSON.stringify({ name: 'projects/p/databases/(default)/documents/events/evt_abc' }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    if (u.includes('/devices/') && method === 'PATCH') {
+      if (failTouch) return new Response('permission denied', { status: 403 });
+      return new Response(JSON.stringify({ name: 'projects/p/.../devices/dev-device-livingroom' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response('unexpected ' + method + ' ' + u, { status: 500 });
+  };
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+const INGEST_ENV = { FIREBASE_PROJECT_ID: 'p', DEVICE_KEY: KEY };
+const ingestReq = () =>
+  new Request('https://w.example/ingest-device-event', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-device-key': KEY },
+    body: JSON.stringify({ deviceId: 'dev-device-livingroom', eventType: 'motion_detected' }),
+  });
+
+check('4.1a: ingest 성공 → events 생성 후 devices lastEventAt PATCH 시도', async () => {
+  const m = mockFirestore();
+  try {
+    const res = await workerHandler.fetch(ingestReq(), INGEST_ENV);
+    assert.equal(res.status, 201);
+    const patch = m.calls.find((c) => c.method === 'PATCH');
+    assert.ok(patch, 'PATCH 호출이 있어야 한다');
+    assert.ok(patch.url.includes('/devices/dev-device-livingroom'));
+    assert.ok(patch.url.includes('updateMask.fieldPaths=lastEventAt'));
+    // events POST 가 PATCH 보다 먼저
+    const order = m.calls.map((c) => c.method);
+    assert.ok(order.indexOf('POST') < order.indexOf('PATCH'));
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1a: lastEventAt PATCH 실패해도 ingest 는 201 유지 (best-effort)', async () => {
+  const m = mockFirestore({ failTouch: true });
+  try {
+    const res = await workerHandler.fetch(ingestReq(), INGEST_ENV);
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.ok(m.calls.some((c) => c.method === 'PATCH')); // 시도는 했다
+  } finally {
+    m.restore();
+  }
 });
 
 // ── run ────────────────────────────────────────────────────────────────

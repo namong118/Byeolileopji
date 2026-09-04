@@ -100,6 +100,28 @@ export async function createEvent(env, eventObj) {
   return String(doc.name || '').split('/').pop();
 }
 
+/**
+ * devices/{deviceId} 의 일부 필드만 갱신 (PATCH + updateMask).
+ * Phase 4.1a 에서는 { lastEventAt: Date } 만 쓴다.
+ * ⚠️ firestore.rules 가 해당 필드만 허용하도록 제한돼 있어야 한다.
+ */
+export async function touchDevice(env, deviceId, fields) {
+  const params = new URLSearchParams();
+  for (const key of Object.keys(fields)) {
+    params.append('updateMask.fieldPaths', key);
+  }
+  if (env.FIREBASE_API_KEY) params.set('key', env.FIREBASE_API_KEY);
+
+  const url = `${base(env)}/devices/${encodeURIComponent(deviceId)}?${params}`;
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ fields: toFirestoreFields(fields) }),
+  });
+  if (!res.ok) throw new FirestoreError(res.status, await safeText(res));
+  return true;
+}
+
 async function safeText(res) {
   try {
     return (await res.text()).slice(0, 500);

@@ -11,9 +11,9 @@
  *   3. CHECK      — inactivity: 마지막 활동 이후 임계 시간 초과
  *   4. NORMAL     — recent_activity
  *
- * systemHealth (Phase 4.0):
+ * systemHealth = **사람 데이터 가용성** (기기 상태 아님):
  *   events 0건 → 'unknown',  그 외 → 'ok'
- *   ('sensor_offline' 은 heartbeat 가 생기는 Phase 4.1/4.2 에서 활성화)
+ *   기기(센서/ESP32) 상태는 별도 축 DeviceHealth (src/services/deviceHealth.ts) 로 분리됨.
  */
 
 import type {
@@ -52,7 +52,7 @@ export function deriveCareStatus(
     : undefined;
 
   const systemHealth: SystemHealth =
-    input.totalEventCount === 0 ? 'unknown' : 'ok';
+    input.totalEventCount === 0 ? 'unknown' : 'ok'; // 사람 데이터 가용성 (기기 아님)
 
   const base = {
     systemHealth,

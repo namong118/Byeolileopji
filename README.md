@@ -46,8 +46,13 @@ Phase 4.0  ✅  클라이언트 상태 자동 판정 (NORMAL / CHECK / EMERGENCY
               ├─ ✅  recent activity → NORMAL / inactivity 경과 → CHECK / sos → EMERGENCY
               ├─ ✅  ESP32 motion_detected → CHECK → NORMAL 자동 복귀 (실기기 수동 검증)
               └─ ⚠️  EMERGENCY/SOS 는 자동 테스트만 (실기기 수동 검증 전)
-Phase 4.1  ⏳  devices.lastSeenAt (센서 offline ≠ inactivity 구분)
-Phase 4.2  ⏳  ESP32 heartbeat
+Phase 4.1a ✅  기기 상태 축(Device Health) 분리 + 배관 (실기기/hosted 검증 완료)
+              ├─ ✅  사람 축(NORMAL/CHECK/EMERGENCY) ↔ 기기 축(online/offline/unknown) 완전 독립 — 앱 수동 검증
+              ├─ ✅  Worker ingest → devices.lastEventAt best-effort 갱신 — Cloudflare 배포 + ESP32 실기기 검증
+              ├─ ✅  Firestore rules (devices update = lastEventAt 만) — Console 게시 완료
+              ├─ ✅  Hero 안전 규칙: 기기 offline → "오늘도 별일 없어요" 금지 — synthetic UI 수동 검증
+              └─ ⚠️  heartbeat 미구현 → 실제 자동 deviceHealth 는 unknown (online/offline 자동 판정은 Phase 4.1b)
+Phase 4.1b ⏳  ESP32 heartbeat + /device-heartbeat → unknown → online/offline 실제 판정
 Phase 4.3  ⏳  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
 Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
@@ -372,18 +377,23 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run lint` | ✅ 통과 |
 | `npx expo-doctor` | ✅ 21/21 |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 23 + 15 통과 (앱 매핑/파생/폴백 11, endpoint 검증/변환 23, 상태 판정 15) |
+| `npm run test:smoke` | ✅ 11 + 25 + 15 + 12 + 6 통과 (앱 매핑 11, endpoint+lastEventAt 25, 사람 축 15, 기기 축 12, rules 정적 6) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
 | Phase 3 실물 PIR (사람 움직임 → HC-SR501 → GPIO4 → ESP32) | ⏳ 센서 도착 후 (`firmware/esp32-pir/README.md`) |
-| **Phase 4.0** recent activity → NORMAL / inactivity 경과 → CHECK | ✅ **실기기 수동 검증 완료** (개발용 2분 threshold) |
-| **Phase 4.0** ESP32 motion_detected 도착 → CHECK → NORMAL 자동 복귀 (앱 새로고침 없이 onSnapshot) | ✅ **실기기 수동 검증 완료** |
+| **Phase 4.0** recent activity → NORMAL / inactivity 경과 → CHECK / ESP32 motion → CHECK→NORMAL 자동 복귀 | ✅ **실기기 수동 검증 완료** (개발용 2분 threshold) |
 | **Phase 4.0** EMERGENCY / SOS 판정 · override · TTL · ack | ✅ 자동 스모크 15건 · ⚠️ 실기기 수동 검증은 미실시 |
+| **Phase 4.1a** 사람 축 / 기기 축 독립 · deriveDeviceHealth · presentHome 안전 규칙 | ✅ 자동 스모크 12건 |
+| **Phase 4.1a** 개발자 오버라이드 `offline` → Hero 가 초록 "오늘도 별일 없어요" 대신 중립 문구 | ✅ **앱 수동 검증 완료** |
+| **Phase 4.1a** `자동으로` 복귀 → 사람 축 CHECK 상태 다시 노출 / 새 motion → CHECK→NORMAL 복귀 | ✅ **앱 수동 검증 완료** |
+| **Phase 4.1a** Worker ingest → devices.lastEventAt best-effort PATCH (실패해도 201) | ✅ 자동 스모크 2건 · ✅ **Cloudflare 배포 + ESP32-S3 실기기 hosted 검증 완료** |
+| **Phase 4.1a** Firestore rules (`devices` update = `lastEventAt` 만) | ✅ **Firebase Console 게시 완료** · ⚠️ 자동 유닛 테스트는 미실시 (에뮬레이터/Java 없음 → 정적 구조 검사 `rules-check.mjs` 6건 + Console Playground 수동) |
+| **Phase 4.1a** 실제 자동 device online/offline 판정 | ⏳ heartbeat 미구현 → Phase 4.1b |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
-순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증·상태 판정)를 검증하고, 화면 로직은
-typecheck + Metro 번들로 커버한다. 규칙이 더 복잡해지면 jest 도입을 재검토한다.
+순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증·상태 판정·기기 판정)를 검증하고,
+화면 로직은 typecheck + Metro 번들로 커버한다. 규칙이 더 복잡해지면 jest 도입을 재검토한다.
 
 ---
 
@@ -554,8 +564,8 @@ Firestore 스키마 변경 없음, 새 컬렉션 없음, Worker/firmware/rules �
 | 3 | 마지막 활동 이후 `inactivityCheckMinutes` 초과 | `CHECK` / reason `inactivity` |
 | 4 | 그 외 | `NORMAL` / reason `recent_activity` |
 
-- `systemHealth`: 이벤트 0건 → `unknown`, 그 외 → `ok`
-  (`sensor_offline` 은 heartbeat 가 생기는 Phase 4.1/4.2 에서 활성화)
+- `systemHealth` = **사람 데이터 가용성** (기기 상태 아님 — 기기는 Phase 4.1a 의 Device Health 축):
+  이벤트 0건 → `unknown`, 그 외 → `ok`
 - **EMERGENCY 는 새 `motion_detected` 로 자동 해제되지 않는다** (규칙 1 최우선).
 - **CHECK → NORMAL 복귀**: 새 활동 이벤트가 `lastActivityAt` 을 갱신 → onSnapshot → 즉시.
 - 개발자 화면의 상태 버튼 = **임시 오버라이드**(TTL 有). 만료되면 자동 판정으로 복귀.
@@ -568,9 +578,9 @@ Firestore 스키마 변경 없음, 새 컬렉션 없음, Worker/firmware/rules �
 | CHECK / `inactivity` | 🟡 노랑 | 한번 확인해 주세요 | "약 2시간째 활동이 확인되지 않았어요." |
 | EMERGENCY / `sos` | 🔴 빨강 | 도움이 필요할 수 있어요 | "오후 3:20에 도움 요청이 있었어요." |
 | NORMAL / `no_data` | ⚪ **중립(회색)** | **아직 활동 정보가 없어요** | "활동 기록이 들어오면 여기에서 확인할 수 있어요." |
-| `sensor_offline` (4.1+) | ⚪ 중립 | 연결 상태를 확인하고 있어요 | — |
+| (기기 offline, Phase 4.1a) | ⚪ 중립 | 센서 연결을 확인하고 있어요 | "마지막 활동은 …에 있었어요." |
 
-> ⚠️ **이벤트가 없거나(`no_data`) 센서 연결이 끊긴 경우, 화면에 "오늘도 별일 없어요"
+> ⚠️ **이벤트가 없거나(`no_data`) 기기(센서) 가 offline 인 경우, 화면에 "오늘도 별일 없어요"
 > 처럼 활동이 정상 확인됐다는 문구를 절대 쓰지 않는다.** 내부 status 는 호환성을 위해
 > NORMAL 이지만, 화면은 중립 문구 + 중립 색을 쓴다.
 
@@ -614,9 +624,135 @@ ESP32 → Wi-Fi → Worker → Firestore → onSnapshot
 
 ### Phase 4.0 에서 구현하지 않은 것
 
-`devices.lastSeenAt` · ESP32 heartbeat · `sensor_offline` 실판정 · Cloudflare cron ·
-서버측 상태 판정 · `careStatus` 문서 · FCM 푸시 · Firebase Auth · Firestore rules 강화 ·
-새 Firestore 컬렉션 · events enum 변경 → 전부 Phase 4.1 이후.
+기기 상태 축 · ESP32 heartbeat · Cloudflare cron · 서버측 상태 판정 · `careStatus` 문서 ·
+FCM 푸시 · Firebase Auth · Firestore rules 강화 · events enum 변경 → 전부 Phase 4.1 이후.
+
+---
+
+## Phase 4.1a — 기기 상태 축(Device Health) 분리
+
+**사람 상태**와 **기기(센서/ESP32) 상태**를 완전히 독립된 두 축으로 만든다.
+두 enum 을 절대 합치지 않고, 표시 경계(`presentHome`)에서만 조합해 Hero 문구 1개를 만든다.
+
+```
+사람 축  deriveCareStatus()   → NORMAL / CHECK / EMERGENCY   (+ reason)
+기기 축  deriveDeviceHealth() → online / offline / unknown   (+ reason)
+              ↓ 스토어에 별도 필드 (careStatus / deviceHealth)
+         presentHome(사람, 기기)  → Hero 톤/이모지/문구 1개
+```
+
+### 왜 4.1a 에서는 항상 `unknown` 인가
+
+제안됐던 "ingest 시 `lastSeenAt` 갱신"은 `motion_detected` 같은 이벤트가 있어야만 갱신된다.
+→ 사람이 오래 가만히 있고 ESP32 는 정상인데 이벤트가 없어 `lastSeenAt` 이 오래되면
+**멀쩡한 센서를 offline 으로 오판**할 수 있다.
+
+그래서 두 신호를 분리한다:
+
+| 필드 | 의미 | 갱신 |
+| --- | --- | --- |
+| `devices/{id}.lastEventAt` | 마지막 이벤트가 서버에 도착한 시각 (**사람** 신호) | Worker 가 `/ingest-device-event` 성공 시 (4.1a) |
+| `devices/{id}.lastHeartbeatAt` | ESP32 가 살아있고 통신 가능함을 확인한 시각 (**기기** 신호) | `/device-heartbeat` (Phase 4.1b) |
+
+**`deriveDeviceHealth` 규칙:** `lastHeartbeatAt` 이 없으면(=heartbeat 신호 없음) → **항상 `unknown`**.
+`lastEventAt` 이 아무리 오래돼도 offline 으로 판정하지 않는다.
+`online`/`offline` 은 `lastHeartbeatAt` 이 주어진 **synthetic/unit test 에서만** 나온다.
+실제 online/offline 판정은 **Phase 4.1b** (ESP32 heartbeat + `/device-heartbeat`)에서 활성화된다.
+
+| deviceDoc | lastHeartbeatAt | 결과 |
+| --- | --- | --- |
+| 없음 | — | `unknown` / `no_device_doc` |
+| 있음 | 없음 (4.1a 는 항상 이 상태) | `unknown` / `no_heartbeat_capability` |
+| 있음 | ≤ `deviceOfflineMinutes` (기본 25분) | `online` / `heartbeat_fresh` (4.1b) |
+| 있음 | > `deviceOfflineMinutes` | `offline` / `heartbeat_stale` (4.1b) |
+
+### Hero 안전 규칙 (`presentHome`)
+
+1. `EMERGENCY` → 기기 상태와 무관하게 EMERGENCY Hero (최우선)
+2. `deviceHealth === 'offline'` → **절대 "오늘도 별일 없어요" 초록 Hero 금지.**
+   중립 "센서 연결을 확인하고 있어요" + 별도 안내(`Notice`)
+3. `deviceHealth === 'unknown'` → **장애가 아니다.** 우리가 받은 이벤트를 무효화하지 않는다.
+   최근 `motion_detected` 가 있으면 기존 NORMAL Hero 그대로.
+4. `deviceHealth === 'online'` → 기존 4.0 Hero 그대로
+
+> Phase 4.1a 실제 데이터에서는 2번(offline)이 나오지 않는다. 코드/유닛 테스트로만 존재한다.
+
+### Firestore
+
+- **새 컬렉션 없음.** `devices/{deviceId}` 에 `lastEventAt` 필드만 추가 (Worker 가 씀).
+- **`firestore.rules` 변경 (⚠️ DEVELOPMENT ONLY):**
+  `devices` 에 **`lastEventAt` 한 필드만** 갱신 허용:
+  ```
+  allow update: if request.resource.data.diff(resource.data)
+                    .affectedKeys().hasOnly(['lastEventAt']);
+  ```
+  핵심 레지스트리 필드(`careRecipientId` / `enabled` / `type` / `location` / `name`)는
+  클라이언트가 변경할 수 없다. 실제 버전에서는 Worker 가 service-account 인증 → 이 규칙 제거.
+- **배포 상태**: 위 규칙을 **Firebase Console 에 실제 게시 완료** (사용자, Phase 4.1a).
+- **Rules 검증**: 이 개발 환경에 Java/firebase-tools/에뮬레이터가 없어
+  `@firebase/rules-unit-testing` 자동 테스트는 미실시. 정적 구조 검사(`scripts/rules-check.mjs`,
+  6건)만 수행. 의미 검증은 Console Playground 수동 절차 (아래).
+
+  **Console Rules Playground 수동 확인** (Firebase Console > Firestore > 규칙 > Playground):
+  1. `Update` · 경로 `/devices/dev-device-livingroom` · 인증 없음 ·
+     문서 `{ lastEventAt: <아무 timestamp> }` → **허용(Allow)** 이어야 함
+  2. 같은 조건 · 문서 `{ enabled: false }` → **거부(Deny)** 이어야 함
+  3. 같은 조건 · 문서 `{ lastEventAt: <ts>, name: "해킹" }` → **거부** 이어야 함
+  4. `Get` · `/devices/dev-device-livingroom` · 인증 없음 → **허용**
+
+### Worker
+
+- `firestore.js`: `touchDevice(env, deviceId, fields)` 추가 — `PATCH devices/{id}?updateMask.fieldPaths=…`
+- `index.js`: `createEvent` **성공 후** `touchDevice(env, deviceId, { lastEventAt: <서버 시각> })` 를
+  **best-effort** 로 호출. **실패해도 이미 성공한 ingest 를 실패로 만들지 않는다 — 201 유지.**
+- `X-Device-Key` 인증 / `validateRequest` / `validateDevice` / `buildEventDoc` — **무변경.**
+
+### 앱
+
+- `src/services/deviceHealth.ts` (신규, 순수) · `src/types/device.ts` (신규) ·
+  `src/services/firestore/deviceRepository.ts` (신규 — `devices/{id}` onSnapshot 구독)
+- `careStore`: `deviceHealth` / `deviceDoc` / `deviceHealthOverride` 상태, `project()` 가
+  사람·기기 두 축을 독립 계산, device 구독을 최초 1회, `teardown()` 에서 해제
+- 개발자 탭: **Care Status (사람 축)** / **Device Health (기기 축)** 두 read-out 카드 +
+  기기 축 임시 오버라이드 버튼(`online`/`offline`/`unknown`/`자동으로`)
+- 홈: 기기 `offline` 일 때만 `Notice` (4.1a 실제 데이터에선 안 나옴)
+
+### 실기기/hosted 수동 검증 완료 (사용자)
+
+**[앱 UI — 두 축 분리]**
+1. 개발자 탭 **Device Health** 구조 정상 노출 (`derived health = unknown` / `no_heartbeat_capability` — 4.1a 정상)
+2. 개발자 오버라이드 `[offline]` → 홈 Hero 가 초록 "오늘도 별일 없어요" 가 **아니라**
+   중립 "센서 연결을 확인하고 있어요" 로 전환됨
+3. `[자동으로]` 복귀 → 사람 축이 CHECK 였으므로 다시 "확인해 주세요" 계열 UI 노출
+4. 새 `motion_detected` → 사람 축 CHECK → NORMAL → "오늘도 별일 없어요" 정상 복귀
+   → **사람 축 / 기기 축의 표시 우선순위·분리가 실제 앱에서 검증됨**
+
+**[Firestore Rules]**
+- Firebase Console 에 `devices` 규칙 실제 게시. `update` 는 `hasOnly(['lastEventAt'])` 만,
+  `create`/`delete` 금지, 핵심 필드 변경 불가.
+
+**[Worker hosted — lastEventAt]**
+- Phase 4.1a Worker 변경을 Cloudflare 에 실제 배포.
+- ESP32-S3 USB 재연결 → 기존 TEMP TEST 의 `motion_detected` 1회 전송 →
+  - ESP32 → Wi-Fi → Worker `/ingest-device-event` 기존 흐름 정상
+  - `events` 문서 생성 성공
+  - **`devices/dev-device-livingroom.lastEventAt` timestamp 필드가 실제로 생성/갱신됨**
+  - 앱에 활동 이벤트 실시간 반영도 기존처럼 정상
+  → **`ESP32-S3 → Worker ingest → events 생성 → devices.lastEventAt best-effort update → 앱 실시간 반영` 실제 검증 완료**
+
+**[아직 pending]**
+- heartbeat 미구현 → `lastHeartbeatAt` 필드/쓰기 없음 → 실제 자동 `deviceHealth` 는
+  항상 `unknown / no_heartbeat_capability` (정상). 실제 `online`/`offline` **자동** 판정은 Phase 4.1b.
+- `online`/`offline` 은 현재 synthetic(unit test) + 개발자 오버라이드로만 확인됨.
+
+### Phase 4.1b 에서 추가될 것
+
+- Worker: `POST /device-heartbeat` 라우트 + `validateHeartbeatRequest` + `touchDevice({ lastHeartbeatAt, lastBootAt?, lastReason? })`
+- `firestore.rules`: `hasOnly(['lastEventAt', 'lastHeartbeatAt', 'lastBootAt', 'lastReason'])` 로 확장
+- 펌웨어(`esp32-pir.ino`): `sendHeartbeat()` — 부팅/주기(≈10분)/재연결 시 전송 (**PIR TEMP TEST 무변경**)
+- `secrets.example.h`: `HEARTBEAT_URL` (또는 `INGEST_URL` 에서 경로 치환)
+- `deriveDeviceHealth`: `lastHeartbeatAt` 이 채워지므로 `unknown` → `online`/`offline` 실제 전환
+- 실기기 검증: heartbeat 로 조용한 시간에도 `online` 유지 (CHECK ≠ 센서 offline) / 분리 후 `offline`
 
 ---
 

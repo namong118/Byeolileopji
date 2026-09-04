@@ -12,7 +12,7 @@ import type { CareEvent, NewCareEvent } from '../types/events';
 import { isSameDay } from '../utils/time';
 import { createId } from '../utils/id';
 import { ACTIVITY_EVENT_TYPES } from './eventViews';
-import { DEV_CARE_RECIPIENT_ID } from '../config/careContext';
+import { DEV_CARE_RECIPIENT_ID, DEV_DEVICE_ID } from '../config/careContext';
 import { isFirebaseConfigured } from '../config/env';
 import {
   InMemoryEventRepository,
@@ -22,6 +22,10 @@ import {
 } from './eventRepository';
 import { getFirestoreDb } from '../lib/firebase';
 import { FirestoreEventRepository } from './firestore/firestoreEventRepository';
+import {
+  FirestoreDeviceRepository,
+  type DeviceRepository,
+} from './firestore/deviceRepository';
 
 export class EventService {
   private readonly repo: EventRepository;
@@ -88,6 +92,7 @@ export type EventDataSource = 'firebase' | 'memory';
 
 function createEventService(): {
   service: EventService;
+  deviceRepo?: DeviceRepository;
   dataSource: EventDataSource;
 } {
   if (isFirebaseConfigured()) {
@@ -97,12 +102,14 @@ function createEventService(): {
         service: new EventService(
           new FirestoreEventRepository(db, DEV_CARE_RECIPIENT_ID),
         ),
+        deviceRepo: new FirestoreDeviceRepository(db, DEV_DEVICE_ID),
         dataSource: 'firebase',
       };
     }
   }
   return {
     service: new EventService(new InMemoryEventRepository()),
+    deviceRepo: undefined,
     dataSource: 'memory',
   };
 }
@@ -111,6 +118,12 @@ const created = createEventService();
 
 /** 앱 전역에서 공유하는 서비스 인스턴스. */
 export const eventService = created.service;
+
+/**
+ * 기기(devices/{id}) 구독. Firestore 모드에서만 존재한다.
+ * undefined 면 기기 축은 항상 'unknown' (문서 없음).
+ */
+export const deviceRepo: DeviceRepository | undefined = created.deviceRepo;
 
 /** 현재 어떤 저장소를 쓰는지 (개발자 화면 표시용). */
 export const EVENT_DATA_SOURCE: EventDataSource = created.dataSource;

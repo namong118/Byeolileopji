@@ -1,17 +1,21 @@
 /**
- * CareStatusResult -> 화면에 보여줄 톤 / 이모지 / 문구.
+ * CareStatusResult / DeviceHealth -> 화면에 보여줄 톤 / 이모지 / 문구.
  *
- * 규칙 엔진(careStatus.ts)은 문자열을 만들지 않는다. 문구는 전부 여기서.
+ * 규칙 엔진(careStatus.ts / deviceHealth.ts)은 문자열을 만들지 않는다. 문구는 전부 여기서.
  * UI 에 기술 용어를 노출하지 않는다. (eventPresenter.ts 와 같은 철학)
  *
- * ⚠️ no_data / sensor_offline 에서는 "오늘도 별일 없어요" 처럼
- *    활동이 정상 확인됐다는 의미의 문구를 절대 쓰지 않는다.
+ * 표시 경계 규칙 (presentHome):
+ *  - EMERGENCY 는 기기 상태와 무관하게 최우선.
+ *  - deviceHealth === 'offline' 이면 (EMERGENCY 아닌 한) 절대 "오늘도 별일 없어요"
+ *    초록 Hero 를 쓰지 않는다. 중립 문구를 쓴다.
+ *  - deviceHealth === 'unknown' 은 장애가 아니다. 기존 4.0 Hero 를 그대로 쓴다.
+ *  - ⚠️ Phase 4.1a 실제 데이터에서는 heartbeat 가 없어 offline 이 나오지 않는다.
  *
  * firebase / time.ts 런타임 import 없음 → 단독 실행 테스트 가능.
  * (날짜 포맷은 time.ts 와 같은 규칙을 순수 유지를 위해 인라인)
  */
 
-import type { CareStatusResult } from '../types/status';
+import type { CareStatusResult, DeviceHealth } from '../types/status';
 
 export type StatusTone = 'normal' | 'check' | 'emergency' | 'neutral';
 
@@ -91,15 +95,6 @@ export function presentCareStatus(
           : '최근 활동이 확인됐어요.',
       };
 
-    case 'sensor_offline':
-      // Phase 4.1+ 에서 실제로 나온다. 확정 문구 금지.
-      return {
-        tone: 'neutral',
-        emoji: '⚪',
-        headline: '연결 상태를 확인하고 있어요',
-        detail: '센서 연결이 확인되면 활동 정보를 다시 보여드릴게요.',
-      };
-
     case 'manual_override':
       return {
         tone:
@@ -128,4 +123,39 @@ export function presentCareStatus(
         detail: '활동 기록이 들어오면 여기에서 확인할 수 있어요.',
       };
   }
+}
+
+/**
+ * 사람 축 + 기기 축을 **표시 경계에서만** 조합해 Hero 문구 1개를 만든다.
+ * (두 enum 을 합치지 않는다 — 여기서 copy 만 고른다)
+ *
+ * @param careStatus 오버라이드가 이미 적용된(effective) 사람-축 결과
+ * @param deviceHealth 오버라이드가 이미 적용된(effective) 기기-축 상태
+ */
+export function presentHome(
+  careStatus: CareStatusResult,
+  deviceHealth: DeviceHealth,
+  now: Date = new Date(),
+): CareStatusText {
+  // 1) EMERGENCY 는 기기 상태와 무관하게 최우선
+  if (careStatus.status === 'EMERGENCY') {
+    return presentCareStatus(careStatus, now);
+  }
+
+  // 2) 기기 offline → 절대 "오늘도 별일 없어요" 초록 Hero 금지, 중립 문구
+  //    (Phase 4.1a 실제 데이터에서는 heartbeat 가 없어 여기 도달하지 않는다)
+  if (deviceHealth === 'offline') {
+    return {
+      tone: 'neutral',
+      emoji: '⚪',
+      headline: '센서 연결을 확인하고 있어요',
+      detail: careStatus.lastActivityAt
+        ? `마지막 활동은 ${relative(careStatus.lastActivityAt, now)}에 있었어요.`
+        : '센서 연결이 확인되면 활동 정보를 다시 보여드릴게요.',
+    };
+  }
+
+  // 3) online / unknown → 기존 4.0 문구 그대로
+  //    (unknown 자체는 장애가 아니다 — 우리가 받은 이벤트를 무효화하지 않는다)
+  return presentCareStatus(careStatus, now);
 }

@@ -4,7 +4,7 @@ import { colors, radius, spacing, typography } from '../constants/theme';
 import type { StatusTone } from '../utils/careStatusText';
 
 interface StatusHeroProps {
-  /** 색 톤. 'neutral' 은 확정 상태가 아닐 때(no_data / sensor_offline). */
+  /** 색 톤. 'neutral' 은 확정 상태가 아닐 때(no_data / 기기 offline 등). */
   tone: StatusTone;
   emoji: string;
   headline: string;

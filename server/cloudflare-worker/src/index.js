@@ -10,7 +10,7 @@
 
 import { validateRequest, validateDevice } from './validate.js';
 import { buildEventDoc } from './buildEvent.js';
-import { getDevice, createEvent, FirestoreError } from './firestore.js';
+import { getDevice, createEvent, touchDevice, FirestoreError } from './firestore.js';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -73,7 +73,7 @@ export default {
       return json({ ok: false, error: dv.error }, dv.status);
     }
 
-    // 5) events 문서 생성 (occurredAt / createdAt = 서버 시각)
+    // 5) events 문서 생성 (occurredAt / createdAt = 서버 시각) — primary operation
     const eventDoc = buildEventDoc({ deviceId: v.deviceId, eventType: v.eventType, device });
     let eventId;
     try {
@@ -82,6 +82,14 @@ export default {
       const status = err instanceof FirestoreError ? 502 : 500;
       log(`firestore write failed: ${err}`);
       return json({ ok: false, error: 'firestore_write_failed' }, status);
+    }
+
+    // 6) devices/{id}.lastEventAt 갱신 — best-effort (Phase 4.1a)
+    //    이미 성공한 ingest 를 이 실패 때문에 실패로 만들지 않는다. 201 유지.
+    try {
+      await touchDevice(env, v.deviceId, { lastEventAt: eventDoc.occurredAt });
+    } catch (err) {
+      log(`touchDevice(lastEventAt) failed (non-fatal): ${err}`);
     }
 
     log(`created event ${eventId} (${v.eventType} @ ${eventDoc.location ?? '-'})`);

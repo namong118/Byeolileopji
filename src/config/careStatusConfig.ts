@@ -31,6 +31,11 @@ export interface CareStatusConfig {
   recomputeIntervalMs: number;
   /** 개발자 화면 임시 오버라이드의 유효 시간(ms) */
   overrideTtlMs: number;
+  /**
+   * heartbeat 가 이 시간(분) 이내면 기기 online, 초과면 offline.
+   * ⚠️ Phase 4.1a 에는 heartbeat 가 없어 실제로는 unknown 만 나온다. (Phase 4.1b 에서 활성)
+   */
+  deviceOfflineMinutes: number;
 }
 
 /** ⚠️ PoC placeholder — 실제 안전 기준 아님 */
@@ -40,4 +45,5 @@ export const careStatusConfig: CareStatusConfig = {
   emergencyTtlHours: num('EXPO_PUBLIC_EMERGENCY_TTL_HOURS', 12),
   recomputeIntervalMs: num('EXPO_PUBLIC_STATUS_RECOMPUTE_INTERVAL_MS', 30_000),
   overrideTtlMs: num('EXPO_PUBLIC_STATUS_OVERRIDE_TTL_MS', 600_000),
+  deviceOfflineMinutes: num('EXPO_PUBLIC_DEVICE_OFFLINE_MINUTES', 25),
 };
