@@ -42,7 +42,14 @@ Phase 3    🚧  ESP32-S3 + PIR 센서 실연동
               ├─ ✅  ESP32-S3 실기기 네트워크 E2E 검증 완료
               │       (실기기 업로드 → Wi-Fi → HTTPS → Worker → 인증 → Firestore → 앱 실시간)
               └─ ⏳  HC-SR501 PIR → GPIO4 → ESP32 실물 센서 E2E 검증  ← pending (센서 미도착)
-Phase 4    ⏳  NORMAL / CHECK 자동 판단 (무활동 시간 기반) + 보호자 인증/규칙
+Phase 4.0  ✅  클라이언트 상태 자동 판정 (NORMAL / CHECK / EMERGENCY)
+              ├─ ✅  recent activity → NORMAL / inactivity 경과 → CHECK / sos → EMERGENCY
+              ├─ ✅  ESP32 motion_detected → CHECK → NORMAL 자동 복귀 (실기기 수동 검증)
+              └─ ⚠️  EMERGENCY/SOS 는 자동 테스트만 (실기기 수동 검증 전)
+Phase 4.1  ⏳  devices.lastSeenAt (센서 offline ≠ inactivity 구분)
+Phase 4.2  ⏳  ESP32 heartbeat
+Phase 4.3  ⏳  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
+Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
 
@@ -365,15 +372,18 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run lint` | ✅ 통과 |
 | `npx expo-doctor` | ✅ 21/21 |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 23 통과 (앱 매핑/파생/폴백 11, endpoint 검증/변환/end-to-end 23) |
+| `npm run test:smoke` | ✅ 11 + 23 + 15 통과 (앱 매핑/파생/폴백 11, endpoint 검증/변환 23, 상태 판정 15) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
 | Phase 3 실물 PIR (사람 움직임 → HC-SR501 → GPIO4 → ESP32) | ⏳ 센서 도착 후 (`firmware/esp32-pir/README.md`) |
+| **Phase 4.0** recent activity → NORMAL / inactivity 경과 → CHECK | ✅ **실기기 수동 검증 완료** (개발용 2분 threshold) |
+| **Phase 4.0** ESP32 motion_detected 도착 → CHECK → NORMAL 자동 복귀 (앱 새로고침 없이 onSnapshot) | ✅ **실기기 수동 검증 완료** |
+| **Phase 4.0** EMERGENCY / SOS 판정 · override · TTL · ack | ✅ 자동 스모크 15건 · ⚠️ 실기기 수동 검증은 미실시 |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
-순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증)를 검증하고, 화면 로직은 typecheck +
-Metro 번들로 커버한다. Phase 4(자동 판단 로직)에서 규칙이 복잡해지면 jest 도입을 재검토한다.
+순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증·상태 판정)를 검증하고, 화면 로직은
+typecheck + Metro 번들로 커버한다. 규칙이 더 복잡해지면 jest 도입을 재검토한다.
 
 ---
 
@@ -527,9 +537,92 @@ per-device key + 서명 검증, rate limiting, CA 핀 고정.
 
 ---
 
+## Phase 4.0 — 클라이언트 상태 자동 판정
+
+앱이 최근 생활 이벤트를 기반으로 현재 상태를 스스로 판정한다.
+Firestore 스키마 변경 없음, 새 컬렉션 없음, Worker/firmware/rules 변경 없음.
+
+### 판정 규칙 (`src/services/careStatus.ts` — 순수 함수)
+
+입력: `lastActivityAt` · `lastSosAt` · `totalEventCount` · `config` · `now`
+(이벤트 스캔은 `src/services/eventViews.ts`)
+
+| 우선순위 | 조건 | 결과 |
+| --- | --- | --- |
+| 1 | 최근 `sos_triggered` (lookback 내 · TTL 내 · 미확인) | `EMERGENCY` / reason `sos` |
+| 2 | 이벤트 0건 또는 활동 이벤트 없음 | `NORMAL` / reason `no_data` |
+| 3 | 마지막 활동 이후 `inactivityCheckMinutes` 초과 | `CHECK` / reason `inactivity` |
+| 4 | 그 외 | `NORMAL` / reason `recent_activity` |
+
+- `systemHealth`: 이벤트 0건 → `unknown`, 그 외 → `ok`
+  (`sensor_offline` 은 heartbeat 가 생기는 Phase 4.1/4.2 에서 활성화)
+- **EMERGENCY 는 새 `motion_detected` 로 자동 해제되지 않는다** (규칙 1 최우선).
+- **CHECK → NORMAL 복귀**: 새 활동 이벤트가 `lastActivityAt` 을 갱신 → onSnapshot → 즉시.
+- 개발자 화면의 상태 버튼 = **임시 오버라이드**(TTL 有). 만료되면 자동 판정으로 복귀.
+
+### 화면 문구 (`src/utils/careStatusText.ts`)
+
+| status / reason | 색 톤 | headline | 예시 detail |
+| --- | --- | --- | --- |
+| NORMAL / `recent_activity` | 🟢 초록 | 오늘도 별일 없어요 | "12분 전에 활동이 확인됐어요." |
+| CHECK / `inactivity` | 🟡 노랑 | 한번 확인해 주세요 | "약 2시간째 활동이 확인되지 않았어요." |
+| EMERGENCY / `sos` | 🔴 빨강 | 도움이 필요할 수 있어요 | "오후 3:20에 도움 요청이 있었어요." |
+| NORMAL / `no_data` | ⚪ **중립(회색)** | **아직 활동 정보가 없어요** | "활동 기록이 들어오면 여기에서 확인할 수 있어요." |
+| `sensor_offline` (4.1+) | ⚪ 중립 | 연결 상태를 확인하고 있어요 | — |
+
+> ⚠️ **이벤트가 없거나(`no_data`) 센서 연결이 끊긴 경우, 화면에 "오늘도 별일 없어요"
+> 처럼 활동이 정상 확인됐다는 문구를 절대 쓰지 않는다.** 내부 status 는 호환성을 위해
+> NORMAL 이지만, 화면은 중립 문구 + 중립 색을 쓴다.
+
+### 임계값 (`src/config/careStatusConfig.ts`)
+
+| 설정 | 기본값 | 환경변수 |
+| --- | --- | --- |
+| inactivity → CHECK | **180분** | `EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES` |
+| sos lookback | 12시간 | `EXPO_PUBLIC_EMERGENCY_LOOKBACK_HOURS` |
+| sos TTL (자동 만료) | 12시간 | `EXPO_PUBLIC_EMERGENCY_TTL_HOURS` |
+| 재계산 주기 | 30초 | `EXPO_PUBLIC_STATUS_RECOMPUTE_INTERVAL_MS` |
+| 오버라이드 TTL | 10분 | `EXPO_PUBLIC_STATUS_OVERRIDE_TTL_MS` |
+
+> ⚠️ **위 기본값은 전부 PoC / 개발용 placeholder 이며 실제 안전 기준이 아니다.**
+> 실제 무활동 판정 시간은 수면·외출·센서 위치·생활 패턴 데이터를 확보한 뒤
+> (Phase 4.1+ 의 per-보호대상 설정 / 시간대 프로파일로) 확정한다.
+
+### 실시간 갱신
+
+`careStore` 가 다음을 모두 같은 `project()` 로 통과시킨다:
+최초 로딩 · 수동 새로고침 · Firestore `onSnapshot` · **저빈도 타이머(기본 30초)** ·
+**앱 포그라운드 복귀(AppState active)**.
+타이머 재계산은 **메모리상 이벤트로만** 하며 Firestore read/write 를 발생시키지 않는다.
+→ 이벤트가 없어도 시간 경과만으로 NORMAL → CHECK 전환이 일어난다.
+
+### 실기기 수동 검증 완료 (사용자, 개발용 2분 threshold)
+
+```
+최근 motion_detected 있음                  → NORMAL 정상 표시
+약 2분간 활동 없음                          → 자동으로 CHECK 전환 (확인 필요 UI)
+CHECK 상태에서 ESP32-S3 USB 재연결 재부팅
+ESP32 TEMP TEST 가 motion_detected 1회 전송
+ESP32 → Wi-Fi → Worker → Firestore → onSnapshot
+앱 조작/새로고침 없이 CHECK → NORMAL 자동 복귀 → 활동 확인 UI 정상 표시
+```
+
+- 개발용 2분 threshold 는 **테스트 설정일 뿐 실제 안전 기준이 아니다.**
+- EMERGENCY / SOS 경로는 **자동 스모크 15건만** 완료. 실기기 수동 검증은 아직 안 했다.
+- ESP32 RESET 버튼으로는 Serial 로그가 안 보였고 USB 재연결 재부팅으로 검증했다.
+  RESET 버튼 이슈는 Phase 4.0 상태 판정과 무관하며 별도 항목으로 둔다.
+
+### Phase 4.0 에서 구현하지 않은 것
+
+`devices.lastSeenAt` · ESP32 heartbeat · `sensor_offline` 실판정 · Cloudflare cron ·
+서버측 상태 판정 · `careStatus` 문서 · FCM 푸시 · Firebase Auth · Firestore rules 강화 ·
+새 Firestore 컬렉션 · events enum 변경 → 전부 Phase 4.1 이후.
+
+---
+
 ## 이번 Phase(3) 에서 구현하지 않은 것
 
 로그인 UI / OAuth · Firebase Auth · HC-SR501 PIR 실물 센서 E2E (센서 미도착) ·
 service account 기반 서버 인증 · per-device key · Cloud Functions · MQTT ·
 Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · AI / ML ·
-무활동 자동 판단 · 119 자동 신고 · 관리자 페이지 · 결제 · 여러 보호대상 전환 UI
+119 자동 신고 · 관리자 페이지 · 결제 · 여러 보호대상 전환 UI

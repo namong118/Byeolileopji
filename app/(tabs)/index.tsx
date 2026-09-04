@@ -15,11 +15,10 @@ import { brand, labels } from '../../src/constants/strings';
 import { colors, spacing, typography } from '../../src/constants/theme';
 import { useCareStore } from '../../src/stores/careStore';
 import { buildHomeSummary } from '../../src/utils/homeSummary';
-import { formatRelative } from '../../src/utils/time';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const status = useCareStore((s) => s.status);
+  const statusText = useCareStore((s) => s.statusText);
   const careTarget = useCareStore((s) => s.careTarget);
   const todayEvents = useCareStore((s) => s.todayEvents);
   const events = useCareStore((s) => s.events);
@@ -32,10 +31,6 @@ export default function HomeScreen() {
     [events, lastActivity],
   );
 
-  const heroSubtext = lastActivity
-    ? `${formatRelative(lastActivity.occurredAt)}에 활동이 확인됐어요.`
-    : '오늘 아직 활동 기록이 없어요.';
-
   return (
     <ScreenScrollView>
       <Text style={styles.brand}>{brand.name}</Text>
@@ -45,7 +40,12 @@ export default function HomeScreen() {
       </Text>
 
       <View style={styles.heroWrap}>
-        <StatusHero status={status} subtext={heroSubtext} />
+        <StatusHero
+          tone={statusText.tone}
+          emoji={statusText.emoji}
+          headline={statusText.headline}
+          subtext={statusText.detail}
+        />
       </View>
 
       {loadError ? (

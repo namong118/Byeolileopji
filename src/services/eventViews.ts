@@ -34,6 +34,8 @@ export interface EventViews {
   todayEvents: CareEvent[];
   /** 홈 "마지막 활동" 카드용 */
   lastActivity?: CareEvent;
+  /** 가장 최근 sos_triggered 이벤트 (상태 판정 EMERGENCY 용) */
+  lastSos?: CareEvent;
 }
 
 export function deriveEventViews(
@@ -50,5 +52,6 @@ export function deriveEventViews(
       isSameLocalDay(new Date(e.occurredAt), now),
     ),
     lastActivity: sorted.find((e) => ACTIVITY_EVENT_TYPES.has(e.eventType)),
+    lastSos: sorted.find((e) => e.eventType === 'sos_triggered'),
   };
 }

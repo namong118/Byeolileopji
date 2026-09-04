@@ -9,6 +9,7 @@ import {
   SectionHeader,
 } from '../../src/components';
 import { colors, radius, spacing, typography } from '../../src/constants/theme';
+import { careStatusConfig } from '../../src/config/careStatusConfig';
 import { SIMULATION_BUTTONS } from '../../src/mock/simulations';
 import { useCareStore } from '../../src/stores/careStore';
 import type { CareStatus } from '../../src/types/status';
@@ -26,16 +27,27 @@ const DATA_SOURCE_LABEL: Record<string, string> = {
   memory: 'In-Memory (앱 종료 시 초기화)',
 };
 
+function fmtTime(iso: string | undefined): string {
+  if (!iso) return '-';
+  return `${formatClock(iso)} (${iso})`;
+}
+
 export default function DeveloperScreen() {
   const simulateEvent = useCareStore((s) => s.simulateEvent);
   const setStatus = useCareStore((s) => s.setStatus);
-  const status = useCareStore((s) => s.status);
+  const clearStatusOverride = useCareStore((s) => s.clearStatusOverride);
+  const acknowledgeEmergency = useCareStore((s) => s.acknowledgeEmergency);
+  const effectiveStatus = useCareStore((s) => s.status);
+  const careStatus = useCareStore((s) => s.careStatus);
+  const statusOverride = useCareStore((s) => s.statusOverride);
   const dataSource = useCareStore((s) => s.dataSource);
   const realtime = useCareStore((s) => s.realtime);
   const actionError = useCareStore((s) => s.actionError);
   const reload = useCareStore((s) => s.reload);
   const [lastLog, setLastLog] = useState<string>();
   const [detailError, setDetailError] = useState<string>();
+
+  const overrideActive = Boolean(statusOverride);
 
   return (
     <ScreenScrollView>
@@ -55,6 +67,38 @@ export default function DeveloperScreen() {
         </Text>
       </View>
 
+      {/* ── 상태 판정 read-out ─────────────────────────────────────────── */}
+      <SectionHeader title="상태 판정 (자동)" />
+      <Card>
+        <Row
+          k="effective status (화면 표시)"
+          v={`${effectiveStatus}${overrideActive ? '  ← 임시 오버라이드' : ''}`}
+        />
+        <Row k="derived status (실제 판정)" v={careStatus.status} />
+        <Row k="reason" v={careStatus.reason} />
+        <Row
+          k="minutesSinceActivity"
+          v={
+            careStatus.minutesSinceActivity == null
+              ? '-'
+              : String(careStatus.minutesSinceActivity)
+          }
+        />
+        <Row k="systemHealth" v={careStatus.systemHealth} />
+        <Row k="lastActivityAt" v={fmtTime(careStatus.lastActivityAt)} />
+        <Row k="emergencyEventAt" v={fmtTime(careStatus.emergencyEventAt)} />
+        <Row k="computedAt" v={careStatus.computedAt} />
+        <Row
+          k="inactivity threshold (분)"
+          v={`${careStatusConfig.inactivityCheckMinutes}  (EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES 로 조정)`}
+          last
+        />
+      </Card>
+      <Text style={styles.note}>
+        위 임계값은 PoC/개발용 placeholder 이며 실제 안전 기준이 아닙니다.
+      </Text>
+
+      {/* ── 이벤트 발생 ────────────────────────────────────────────────── */}
       <SectionHeader title="이벤트 발생" />
       <View style={styles.grid}>
         {SIMULATION_BUTTONS.map((btn) => (
@@ -96,18 +140,47 @@ export default function DeveloperScreen() {
         </View>
       ) : null}
 
-      <SectionHeader title="상태 변경" />
+      {/* ── 상태 임시 오버라이드 ──────────────────────────────────────── */}
+      <SectionHeader title="상태 임시 오버라이드 (개발용)" />
+      <Text style={styles.note}>
+        아래 버튼은 자동 판정을{' '}
+        {Math.round(careStatusConfig.overrideTtlMs / 60000)}분 동안 임시로
+        덮어씁니다. 시간이 지나거나 아래 [자동 판정으로] 버튼을 누르면 자동
+        판정으로 돌아갑니다.
+      </Text>
       <View style={styles.statusRow}>
         {STATUS_BUTTONS.map((btn) => (
           <PressableButton
             key={btn.value}
             label={btn.label}
-            variant={status === btn.value ? 'solid' : 'outline'}
+            variant={
+              overrideActive && effectiveStatus === btn.value
+                ? 'solid'
+                : 'outline'
+            }
             style={styles.statusItem}
             onPress={() => setStatus(btn.value)}
           />
         ))}
       </View>
+      <View style={styles.statusRow}>
+        <PressableButton
+          label="자동 판정으로"
+          onPress={() => clearStatusOverride()}
+          style={styles.statusItem}
+        />
+        <PressableButton
+          label="긴급 해제 (ack)"
+          onPress={() => acknowledgeEmergency()}
+          style={styles.statusItem}
+        />
+      </View>
+      {overrideActive && statusOverride ? (
+        <Text style={styles.note}>
+          현재 오버라이드: {statusOverride.status} · 만료{' '}
+          {formatClock(new Date(statusOverride.until).toISOString())}
+        </Text>
+      ) : null}
 
       <SectionHeader title="마지막 동작" />
       <Card>
@@ -116,6 +189,15 @@ export default function DeveloperScreen() {
         </Text>
       </Card>
     </ScreenScrollView>
+  );
+}
+
+function Row({ k, v, last }: { k: string; v: string; last?: boolean }) {
+  return (
+    <View style={[styles.row, last && styles.rowLast]}>
+      <Text style={styles.rowKey}>{k}</Text>
+      <Text style={styles.rowVal}>{v}</Text>
+    </View>
   );
 }
 
@@ -128,6 +210,11 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
     marginTop: spacing.xs,
+  },
+  note: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
   },
   sourceBadge: {
     marginTop: spacing.lg,
@@ -148,6 +235,28 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     marginTop: 2,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: spacing.md,
+  },
+  rowLast: {
+    borderBottomWidth: 0,
+  },
+  rowKey: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    flexShrink: 0,
+  },
+  rowVal: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    textAlign: 'right',
+    flex: 1,
   },
   grid: {
     flexDirection: 'row',
@@ -172,6 +281,7 @@ const styles = StyleSheet.create({
   statusRow: {
     flexDirection: 'row',
     gap: spacing.md,
+    marginTop: spacing.sm,
   },
   statusItem: {
     flex: 1,
