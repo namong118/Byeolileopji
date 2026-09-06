@@ -14,8 +14,7 @@ export const labels = {
   developerTab: '개발자',
 
   lastActivity: '마지막 활동',
-  currentPresence: '현재 상태',
-  todayStatus: '오늘의 상태',
+  todayActivity: '오늘 활동',
   todayTimeline: '오늘의 기록',
   viewAllTimeline: '전체 기록 보기',
 

@@ -15,6 +15,13 @@ import assert from 'node:assert/strict';
 
 import { deriveDeviceHealth } from '../src/services/deviceHealth.ts';
 import { presentHome } from '../src/utils/careStatusText.ts';
+import { ACTIVITY_EVENT_TYPES } from '../src/services/eventViews.ts';
+import { presentSensorRow } from '../src/utils/deviceHealthText.ts';
+import { formatClock, formatRelativeDetailed } from '../src/utils/time.ts';
+import {
+  buildTodayActivitySummary,
+  DAILY_LIVING_ACTIVITY_EVENT_TYPES,
+} from '../src/utils/todayActivity.ts';
 
 const NOW = new Date('2026-09-04T18:00:00.000Z');
 const cfg = { deviceOfflineMinutes: 25 };
@@ -185,6 +192,194 @@ check('10b. deriveDeviceHealth: lastEventAt 신선 + heartbeat 없음 → 여전
   });
   assert.equal(r.health, 'unknown');
   assert.equal(r.reason, 'no_heartbeat_capability');
+});
+
+// ── 11. (STEP B) presentSensorRow — 홈 "센서 연결" 행 문구 ──────────────
+check('11. presentSensorRow: online + 사람 NORMAL → "정상"', () => {
+  assert.deepEqual(presentSensorRow('online', 'NORMAL'), {
+    label: '센서 연결',
+    value: '정상',
+  });
+});
+
+check('11b. presentSensorRow: online + 사람 CHECK → "정상 · 신호는 계속 오고 있어요" (센서 고장 아님)', () => {
+  assert.equal(
+    presentSensorRow('online', 'CHECK').value,
+    '정상 · 신호는 계속 오고 있어요',
+  );
+});
+
+check('11c. presentSensorRow: offline → "신호가 끊겼어요"', () => {
+  assert.equal(presentSensorRow('offline', 'NORMAL').value, '신호가 끊겼어요');
+  assert.equal(presentSensorRow('offline', 'CHECK').value, '신호가 끊겼어요');
+});
+
+check('11d. presentSensorRow: unknown → null (행 자체를 숨김, 장애로 표현 안 함)', () => {
+  assert.equal(presentSensorRow('unknown', 'NORMAL'), null);
+  assert.equal(presentSensorRow('unknown', 'CHECK'), null);
+});
+
+check('11e. 홈 "센서 연결" 문구에 개발자 enum(online/offline/heartbeat/reason)이 새지 않는다', () => {
+  for (const [h, p] of [
+    ['online', 'NORMAL'],
+    ['online', 'CHECK'],
+    ['offline', 'NORMAL'],
+  ]) {
+    const row = presentSensorRow(h, p);
+    assert.ok(!/online|offline|unknown|heartbeat|reason/i.test(row.value));
+  }
+});
+
+// ── 12. (STEP B) formatRelativeDetailed — 마지막 활동 상대시간 ──────────
+check('12. formatRelativeDetailed: 방금 / 12분 전 / 3시간 12분 전 / 5시간 전 / 1일 전', () => {
+  const base = new Date('2026-09-04T18:00:00.000Z');
+  const ago = (m) => new Date(base.getTime() - m * 60_000).toISOString();
+  assert.equal(formatRelativeDetailed(ago(0), base), '방금');
+  assert.equal(formatRelativeDetailed(ago(12), base), '12분 전');
+  assert.equal(formatRelativeDetailed(ago(3 * 60 + 12), base), '3시간 12분 전');
+  assert.equal(formatRelativeDetailed(ago(5 * 60), base), '5시간 전');
+  assert.equal(formatRelativeDetailed(ago(26 * 60), base), '1일 전');
+});
+
+// ── 13. (STEP C/D) buildTodayActivitySummary — 오늘 활동 요약 ──────────
+//    STEP D: 홈 "오늘 활동" 카운트는 DAILY_LIVING_ACTIVITY_EVENT_TYPES(모션/문/외출/귀가)
+//    만 센다. eventViews.ts 의 ACTIVITY_EVENT_TYPES(복약·워치 포함)와 다르다.
+//    로컬 날짜 기준으로 오늘 이벤트를 만든다 (러너 타임존과 무관하게 안정적).
+function atToday(h, m = 0) {
+  const d = new Date(NOW);
+  d.setHours(h, m, 0, 0);
+  return d.toISOString();
+}
+function atYesterday(h, m = 0) {
+  const d = new Date(NOW);
+  d.setDate(d.getDate() - 1);
+  d.setHours(h, m, 0, 0);
+  return d.toISOString();
+}
+const ev = (eventType, iso) => ({
+  id: iso,
+  eventType,
+  source: 'sensor',
+  occurredAt: iso,
+});
+
+check('13. 오늘 활동 0건 → count 0, "아직 확인된 활동이 없어요", 시각 없음', () => {
+  const s = buildTodayActivitySummary([], NOW);
+  assert.equal(s.count, 0);
+  assert.equal(s.text, '아직 확인된 활동이 없어요');
+  assert.equal(s.firstAt, undefined);
+  assert.equal(s.lastAt, undefined);
+});
+
+check('13b. 오늘 활동 1건 → count 1, 범위 중복 없이 "1번 · 오전 9:00"', () => {
+  const s = buildTodayActivitySummary([ev('motion_detected', atToday(9, 0))], NOW);
+  assert.equal(s.count, 1);
+  assert.equal(s.text, '1번 · 오전 9:00');
+  assert.equal(s.firstAt, '오전 9:00');
+  assert.equal(s.lastAt, '오전 9:00');
+});
+
+check('13c. 오늘 활동 여러 건 → "8번 · 오전 7:10 ~ 오후 3:12" (순서 무관)', () => {
+  const times = [[15, 12], [7, 10], [8, 32], [10, 15], [11, 40], [13, 20], [14, 5], [14, 42]];
+  const events = times.map(([h, m]) => ev('motion_detected', atToday(h, m)));
+  const s = buildTodayActivitySummary(events, NOW);
+  assert.equal(s.count, 8);
+  assert.equal(s.firstAt, '오전 7:10');
+  assert.equal(s.lastAt, '오후 3:12');
+  assert.equal(s.text, '8번 · 오전 7:10 ~ 오후 3:12');
+});
+
+check('13d. 어제 이벤트는 오늘 집계에서 제외', () => {
+  const s = buildTodayActivitySummary(
+    [
+      ev('motion_detected', atYesterday(9, 0)),
+      ev('motion_detected', atYesterday(22, 0)),
+      ev('motion_detected', atToday(10, 30)),
+    ],
+    NOW,
+  );
+  assert.equal(s.count, 1);
+  assert.equal(s.firstAt, '오전 10:30');
+});
+
+check('13e. (STEP D) 포함 종류: motion_detected / door_opened / returned_home / left_home', () => {
+  const s = buildTodayActivitySummary(
+    [
+      ev('motion_detected', atToday(7, 0)),
+      ev('door_opened', atToday(8, 0)),
+      ev('left_home', atToday(9, 0)),
+      ev('returned_home', atToday(17, 0)),
+    ],
+    NOW,
+  );
+  assert.equal(s.count, 4);
+  assert.equal(s.text, '4번 · 오전 7:00 ~ 오후 5:00');
+});
+
+check('13f. (STEP D) 제외 종류: medication_taken / watch_activity / sos_triggered / medication_missed', () => {
+  const s = buildTodayActivitySummary(
+    [
+      ev('medication_taken', atToday(8, 0)),
+      ev('watch_activity', atToday(9, 0)),
+      ev('sos_triggered', atToday(10, 0)),
+      ev('medication_missed', atToday(11, 0)),
+      ev('motion_detected', atToday(12, 30)),
+    ],
+    NOW,
+  );
+  assert.equal(s.count, 1); // motion_detected 만
+  assert.equal(s.text, '1번 · 오후 12:30');
+});
+
+check('13g. (STEP D) 오늘 활동 분류 ≠ eventViews.ACTIVITY_EVENT_TYPES', () => {
+  // medication_taken / watch_activity 는 ACTIVITY_EVENT_TYPES 에는 있지만
+  // 홈 "오늘 활동" 카운트(DAILY_LIVING_ACTIVITY_EVENT_TYPES)에는 없다.
+  assert.ok(ACTIVITY_EVENT_TYPES.has('medication_taken'));
+  assert.ok(ACTIVITY_EVENT_TYPES.has('watch_activity'));
+  assert.ok(!DAILY_LIVING_ACTIVITY_EVENT_TYPES.has('medication_taken'));
+  assert.ok(!DAILY_LIVING_ACTIVITY_EVENT_TYPES.has('watch_activity'));
+  for (const t of ['motion_detected', 'door_opened', 'returned_home', 'left_home']) {
+    assert.ok(DAILY_LIVING_ACTIVITY_EVENT_TYPES.has(t));
+  }
+});
+
+check('13h. 첫/마지막 활동 시각 정확성 (입력이 뒤섞여 있어도)', () => {
+  const s = buildTodayActivitySummary(
+    [
+      ev('door_opened', atToday(20, 5)),
+      ev('motion_detected', atToday(6, 45)),
+      ev('returned_home', atToday(12, 0)),
+    ],
+    NOW,
+  );
+  assert.equal(s.firstAt, '오전 6:45');
+  assert.equal(s.lastAt, '오후 8:05');
+  assert.equal(s.count, 3);
+});
+
+check('13i. 날짜 경계 — 오늘 00:00 포함 / 어제 23:59 제외', () => {
+  const s = buildTodayActivitySummary(
+    [
+      ev('motion_detected', atYesterday(23, 59)),
+      ev('motion_detected', atToday(0, 0)),
+    ],
+    NOW,
+  );
+  assert.equal(s.count, 1);
+  assert.equal(s.firstAt, '오전 12:00');
+});
+
+// ── 14. (STEP D) formatClock — 보호자용 12시간 표기 통일 ───────────────
+check('14. formatClock: 07:10→오전 7:10 / 12:03→오후 12:03 / 15:43→오후 3:43 / 00:05→오전 12:05', () => {
+  const at = (h, m) => {
+    const d = new Date(NOW);
+    d.setHours(h, m, 0, 0);
+    return d.toISOString();
+  };
+  assert.equal(formatClock(at(7, 10)), '오전 7:10');
+  assert.equal(formatClock(at(12, 3)), '오후 12:03');
+  assert.equal(formatClock(at(15, 43)), '오후 3:43');
+  assert.equal(formatClock(at(0, 5)), '오전 12:05');
 });
 
 // ── run ────────────────────────────────────────────────────────────────

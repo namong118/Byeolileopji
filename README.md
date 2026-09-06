@@ -54,12 +54,17 @@ Phase 4.1a ✅  기기 상태 축(Device Health) 분리 + 배관 (실기기/host
               └─ ⚠️  heartbeat 미구현 → 실제 자동 deviceHealth 는 unknown (online/offline 자동 판정은 Phase 4.1b)
 Phase 4.1b ✅  ESP32 heartbeat + /device-heartbeat → unknown → online/offline 실제 판정 (실기기 E2E 검증 완료)
               ├─ ✅  Worker `/device-heartbeat` + firestore.rules + 펌웨어 heartbeat — 구현 완료
-              ├─ ✅  typecheck/lint/test:smoke(93건, worker+rules+firmware 정적) 전부 통과
+              ├─ ✅  typecheck/lint/test:smoke(worker+rules+firmware 정적 포함) 전부 통과
               ├─ ✅  Cloudflare Worker 배포 + Firebase Console rules 게시 + ESP32-S3 실기기 업로드 완료
               ├─ ✅  ESP32 heartbeat HTTP 200 → devices.lastHeartbeatAt 실제 갱신 → 앱 online/heartbeat_fresh
               ├─ ✅  ESP32 전원 차단 → offline/heartbeat_stale ("센서 연결을 확인하고 있어요") → 재연결 → online 자동 복귀
               ├─ ✅  사람 축(NORMAL/CHECK) ↔ 기기 축(online/offline) 실기기에서 독립 동작 확인
               └─ ⏳  HC-SR501 PIR 실물 센서 E2E 는 여전히 pending (PIR 미연결 floating motion 은 검증 결과에서 제외)
+Home UX A–D ✅  보호자 홈 화면 정보구조 압축 (판정 로직·개발자 탭 무변경, 실기기 UX 검증 완료)
+              ├─ ✅  홈 = Hero + 통합 정보 카드(마지막 활동 / 센서 연결 / 오늘 활동) + 오늘의 기록
+              ├─ ✅  복약·워치·평상시 SOS·외출/귀가·중복 offline 경고·별도 offline 문장 홈에서 제거
+              ├─ ✅  오전/오후 12시간 표기 통일 · "오늘 활동" = 생활 움직임(모션/문/외출/귀가) 전용 집계
+              └─ ✅  날짜 경계(자정 넘김) 실기기 확인 — 전날 lastActivity 유지 / 당일 활동·기록 0건 독립 표시
 Phase 4.3  ⏳  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
 Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
@@ -384,7 +389,7 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run lint` | ✅ 통과 |
 | `npx expo-doctor` | ⚠️ 20/21 (`expo` 57.0.19 / `expo-router` 57.0.18 이 SDK 핀 `~57.0.20` / `~57.0.19` 과 패치 버전 불일치 — Phase 4.1b 와 무관, 별도 `npx expo install --check` 대상) |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 38 + 15 + 14 + 6 + 9 = 93 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 14, rules 정적 6, firmware 정적 9) |
+| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 6 + 9 = 109 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, rules 정적 6, firmware 정적 9) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
@@ -861,6 +866,69 @@ allow update: if request.resource.data.diff(resource.data)
   **PIR 실물 E2E 성공으로 기록하지 않는다.** (heartbeat 는 PIR 입력과 무관하게 타이머로만 전송)
 - `esp32-pir.ino` 의 **TEMP TEST 블록(부팅당 `motion_detected` 1회)은 아직 유지** —
   PIR 실물 센서 E2E 검증 시 함께 제거 예정.
+
+---
+
+## Guardian Home UX (A–D) — 보호자 홈 화면 정리
+
+Phase 4.1b 까지로 사람 축 / 기기 축 판정과 실기기 파이프라인이 완성된 뒤,
+**앱 홈 화면만** 보호자가 "지금 별일 없나?" 를 1~2초에 이해하도록 압축했다.
+판정 로직(`careStore` / `careStatus` / `deviceHealth` / `presentHome`)·개발자 탭·
+서버·펌웨어는 **한 줄도 바뀌지 않았다.** 화면 조립과 표시 문구만 정리했다.
+
+### 무엇을 바꿨나
+
+| 구분 | 이전 | 이후 |
+| --- | --- | --- |
+| 홈 정보구조 | Hero + pairRow + "오늘의 상태" 카드(5행: 생활활동/외출귀가/복약/워치/SOS) + 타임라인 | Hero + **통합 정보 카드(마지막 활동 / 센서 연결 / 오늘 활동)** + 타임라인 |
+| 복약·워치·평상시 SOS 행 | 홈에 표시 | **홈에서 제거** (개발자 탭 시뮬레이션·이벤트 타입은 유지) |
+| 외출/귀가 | pairRow 로 표시 | 홈 미표시 (`homeSummary` 계산·타입은 유지) |
+| 기기 offline | 빨간 `Notice` + Hero 문구 + Hero 아래 회색 문장 (3중) | Hero(중립) + 정보 카드 "센서 연결 / 신호가 끊겼어요" (2곳). 빨간 경고·별도 문장 제거 |
+| "마지막 활동" 표기 | `오후 3:12 · 거실` (절대시각, 두 곳 중복) | `3시간 12분 전 · 거실` (상대시간, 정보 카드 1곳) |
+| 시각 표기 | 홈 `오후 3:12` / 타임라인 `15:12` 혼재 | **전부 `오전/오후` 12시간** (`formatClock`) |
+| "오늘 활동 N번" | 없음 → STEP C 에서 `ACTIVITY_EVENT_TYPES`(복약·워치 포함) | `DAILY_LIVING_ACTIVITY_EVENT_TYPES` = 모션/문/외출/귀가 **생활 움직임만** |
+
+### "오늘 활동" 집계 분류가 왜 별도인가
+
+- `src/services/eventViews.ts` 의 `ACTIVITY_EVENT_TYPES` (**변경 없음**) — "마지막 활동" 판정과
+  `careStatus` inactivity 판정용. 넓은 의미의 "사람이 뭔가 했다" 신호(복약·워치 포함).
+- `src/utils/todayActivity.ts` 의 `DAILY_LIVING_ACTIVITY_EVENT_TYPES` (**신규**) — 홈 "오늘 활동 N번"
+  카운트 전용. 보호자가 "생활 움직임 횟수" 로 읽으므로 물리적 동선(`motion_detected` /
+  `door_opened` / `returned_home` / `left_home`)만. `medication_taken` / `watch_activity` 는 제외.
+- 이 분리는 **오늘 활동 요약 숫자에만** 영향을 준다. 마지막 활동 판정 / inactivity 판정 /
+  타임라인 분류 / 이벤트 의미는 그대로다. (`scripts/phase41-devicehealth-smoke.mjs` 13e~13g 로 고정)
+
+### 상태별 홈 (요약)
+
+| 상태 | Hero | 정보 카드 |
+| --- | --- | --- |
+| NORMAL | 🟢 오늘도 별일 없어요 / "12분 전에 활동이 확인됐어요." | 마지막 활동 `12분 전 · 거실` · 센서 연결 `정상` · 오늘 활동 `8번 · …` |
+| CHECK + online | 🟡 한번 확인해 주세요 / "약 3시간째 활동이 확인되지 않았어요." | 센서 연결 `정상 · 신호는 계속 오고 있어요` — **"센서는 정상, 사람이 조용함" 구분** |
+| DEVICE OFFLINE | ⚪ 센서 연결을 확인하고 있어요 (중립, `presentHome` 규칙2) | 센서 연결 `신호가 끊겼어요` — "사람에게 문제" 해석 문구 없음 |
+| EMERGENCY | 🔴 도움이 필요할 수 있어요 (`presentHome` 규칙1, 기기 무관 최우선) | 정보 카드는 종속 정보, Hero 보다 약함 |
+
+### 실기기 UX 검증 (사용자, Android)
+
+- STEP A~D 화면을 실물 Android 기기에서 확인. 통합 정보 카드 정상, OFFLINE 문구 중복 감소,
+  "오늘의 기록" 이 첫 화면 안쪽으로 올라옴.
+- **날짜 경계(자정 넘김) 확인** — 9월 7일 앱 실행 시, 직전 활동은 전날 데이터이고 당일 활동/기록은
+  0건인 상태에서:
+  - 마지막 활동: `11시간 55분 전 · 거실` (전날 활동, 상대시간으로 유지)
+  - 센서 연결: `신호가 끊겼어요`
+  - 오늘 활동: `아직 확인된 활동이 없어요` (당일 0건)
+  - 오늘의 기록: `아직 오늘 기록이 없어요` (당일 0건)
+  네 값이 서로 모순 없이 표시됨 — 전날 `lastActivity` 유지 / 당일 활동 집계 / 당일 타임라인이
+  각각 독립적으로 계산됨을 실기기에서 확인.
+- 개발 실기기 UX 검증에서는 `EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES=2` override 사용
+  (`.env`, 추적 안 됨). **실사용 안전 기준이 아니다** — 코드 기본값은 180분.
+
+### 변경 파일
+
+- 화면/유틸: `app/(tabs)/index.tsx`, `src/constants/strings.ts`, `src/utils/homeSummary.ts`,
+  `src/utils/time.ts`, `src/components/{SectionHeader,TimelineItem,TimelineList}.tsx`
+- 신규: `src/utils/deviceHealthText.ts` (`presentSensorRow`),
+  `src/utils/todayActivity.ts` (`buildTodayActivitySummary` + `DAILY_LIVING_ACTIVITY_EVENT_TYPES`)
+- 테스트: `scripts/phase41-devicehealth-smoke.mjs` (기기 축 + 홈 표시 14 → 30건)
 
 ---
 

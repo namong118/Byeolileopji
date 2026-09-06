@@ -14,11 +14,18 @@ import {
 import { brand, labels } from '../../src/constants/strings';
 import { colors, spacing, typography } from '../../src/constants/theme';
 import { useCareStore } from '../../src/stores/careStore';
+import {
+  presentSensorRow,
+  type StatusRow,
+} from '../../src/utils/deviceHealthText';
 import { buildHomeSummary } from '../../src/utils/homeSummary';
+import { buildTodayActivitySummary } from '../../src/utils/todayActivity';
+import { formatKoreanDate } from '../../src/utils/time';
 
 export default function HomeScreen() {
   const router = useRouter();
   const statusText = useCareStore((s) => s.statusText);
+  const personStatus = useCareStore((s) => s.status);
   const careTarget = useCareStore((s) => s.careTarget);
   const todayEvents = useCareStore((s) => s.todayEvents);
   const events = useCareStore((s) => s.events);
@@ -32,10 +39,27 @@ export default function HomeScreen() {
     () => buildHomeSummary(events, lastActivity),
     [events, lastActivity],
   );
+  const todayActivity = useMemo(
+    () => buildTodayActivitySummary(events),
+    [events],
+  );
+  const today = useMemo(() => formatKoreanDate(new Date()), []);
 
-  // 기기 축이 offline 일 때만 별도 안내 (사람 축 Hero 와 독립).
-  // Phase 4.1a 실제 데이터에서는 heartbeat 가 없어 offline 이 나오지 않는다.
   const effectiveDeviceHealth = deviceHealthOverride ?? deviceHealth.health;
+
+  // ── 통합 정보 카드: Hero 를 본 다음 근거를 한 카드에서 확인 ──────────────
+  //   마지막 활동 / 센서 연결 / 오늘 활동. 값이 없는 행은 넣지 않는다.
+  //   "오늘 활동" 은 항상 넣는다 (0 건이면 "아직 확인된 활동이 없어요").
+  const infoRows: StatusRow[] = [];
+  if (summary.lastActivityText) {
+    infoRows.push({
+      label: labels.lastActivity,
+      value: summary.lastActivityText,
+    });
+  }
+  const sensorRow = presentSensorRow(effectiveDeviceHealth, personStatus);
+  if (sensorRow) infoRows.push(sensorRow);
+  infoRows.push({ label: labels.todayActivity, value: todayActivity.text });
 
   return (
     <ScreenScrollView>
@@ -44,6 +68,7 @@ export default function HomeScreen() {
         {careTarget.name}
         <Text style={styles.relation}>{`  ${careTarget.relation}`}</Text>
       </Text>
+      <Text style={styles.date}>{today}</Text>
 
       <View style={styles.heroWrap}>
         <StatusHero
@@ -53,6 +78,19 @@ export default function HomeScreen() {
           subtext={statusText.detail}
         />
       </View>
+
+      {!loadError ? (
+        <Card style={styles.infoCard}>
+          {infoRows.map((row, index) => (
+            <SummaryRow
+              key={row.label}
+              label={row.label}
+              value={row.value}
+              last={index === infoRows.length - 1}
+            />
+          ))}
+        </Card>
+      ) : null}
 
       {loadError ? (
         <View style={styles.banner}>
@@ -64,51 +102,9 @@ export default function HomeScreen() {
         </View>
       ) : null}
 
-      {effectiveDeviceHealth === 'offline' ? (
-        <View style={styles.banner}>
-          <Notice
-            message="센서와 연결이 끊겼어요. 계속되면 직접 확인해 주세요."
-            tone="error"
-          />
-        </View>
-      ) : null}
-
-      <View style={styles.pairRow}>
-        <Card style={styles.pairCard}>
-          <Text style={styles.pairLabel}>{labels.lastActivity}</Text>
-          <Text style={styles.pairValue}>
-            {summary.lastActivityDetail ?? '기록 없음'}
-          </Text>
-        </Card>
-        <Card style={styles.pairCard}>
-          <Text style={styles.pairLabel}>{labels.currentPresence}</Text>
-          <Text style={styles.pairValue}>{summary.presenceText}</Text>
-        </Card>
-      </View>
-
-      <SectionHeader title={labels.todayStatus} />
-      <Card>
-        <SummaryRow
-          label="생활 활동"
-          value={summary.lastActivityDetail ?? '기록 없음'}
-        />
-        <SummaryRow label="외출 / 귀가" value={summary.presenceText} />
-        <SummaryRow
-          label="복약"
-          value={summary.medicationText}
-          highlight={summary.medicationTakenCount < summary.medicationPlanned}
-        />
-        <SummaryRow label="스마트워치" value={summary.watchText} />
-        <SummaryRow
-          label="SOS"
-          value={summary.sosText}
-          highlight={summary.hasSos}
-          last
-        />
-      </Card>
-
       <SectionHeader
         title={labels.todayTimeline}
+        style={styles.timelineHeader}
         action={
           <Text style={styles.link} onPress={() => router.push('/timeline')}>
             {labels.viewAllTimeline}
@@ -116,7 +112,7 @@ export default function HomeScreen() {
         }
       />
       <Card>
-        <TimelineList events={todayEvents} limit={4} />
+        <TimelineList events={todayEvents} limit={4} compact />
       </Card>
     </ScreenScrollView>
   );
@@ -138,28 +134,23 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
   },
+  date: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
+  },
   heroWrap: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
+  },
+  infoCard: {
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
   },
   banner: {
     marginTop: spacing.md,
   },
-  pairRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginTop: spacing.md,
-  },
-  pairCard: {
-    flex: 1,
-  },
-  pairLabel: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginBottom: spacing.xs,
-  },
-  pairValue: {
-    ...typography.bodyStrong,
-    color: colors.textPrimary,
+  timelineHeader: {
+    marginTop: spacing.lg,
   },
   link: {
     ...typography.caption,
