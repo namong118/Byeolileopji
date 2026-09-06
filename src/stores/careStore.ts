@@ -4,11 +4,11 @@
  *   UI → careStore → EventService / deviceRepo → Firestore | InMemory
  *
  * Phase 4.0 — 사람 축 자동 판정 (deriveCareStatus).
- * Phase 4.1a — 기기 축(DeviceHealth)을 **완전히 독립된 두 번째 축**으로 추가한다.
+ * Phase 4.1a/4.1b — 기기 축(DeviceHealth)을 **완전히 독립된 두 번째 축**으로 관리한다.
  *   - deriveCareStatus() (사람)  /  deriveDeviceHealth() (기기)  를 project() 에서 독립 계산
  *   - 두 enum 을 합치지 않는다. 스토어에도 별도 필드 (careStatus / deviceHealth)
  *   - 표시 경계(presentHome)에서만 조합해 Hero 문구 1개를 만든다
- *   - ⚠️ heartbeat 가 없으므로 실제 데이터에서 deviceHealth 는 항상 'unknown'
+ *   - 4.1b: ESP32 heartbeat → devices/{id}.lastHeartbeatAt → deviceHealth online/offline 실제 판정
  *
  * init / reload / onSnapshot(events) / onSnapshot(device) / 저빈도 타이머 / AppState active
  * 가 모두 같은 project() 를 통과한다. 타이머 재계산은 Firestore I/O 없음.
@@ -138,7 +138,7 @@ function project(input: ProjectInput): DerivedSlice {
   const deviceHealth = deriveDeviceHealth({
     deviceDocExists: Boolean(deviceDoc),
     lastEventAt: deviceDoc?.lastEventAt,
-    lastHeartbeatAt: deviceDoc?.lastHeartbeatAt, // Phase 4.1a: 항상 undefined
+    lastHeartbeatAt: deviceDoc?.lastHeartbeatAt, // 4.1b: heartbeat 도입 시 채워짐
     config: careStatusConfig,
     now,
   });

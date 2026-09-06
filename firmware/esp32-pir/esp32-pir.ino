@@ -1,9 +1,11 @@
 /*
  * 별일없지 (Byeolil Eopji) — ESP32-S3 + HC-SR501 PIR 모션센서 펌웨어
  *
- *   사람 움직임 → HC-SR501 → ESP32-S3 → Wi-Fi → HTTPS POST
- *     → Cloudflare Worker(/ingest-device-event) → Firestore events
- *     → onSnapshot → 별일없지 앱 → "거실에서 활동이 확인됐어요."
+ *   사람 움직임 → HC-SR501 → ESP32-S3 → Wi-Fi → POST /ingest-device-event
+ *     → Firestore events → onSnapshot → 앱 → "거실에서 활동이 확인됐어요."   (사람 활동 신호)
+ *
+ *   주기적 heartbeat → POST /device-heartbeat                                (기기 생존 신호, Phase 4.1b)
+ *     → devices/{id}.lastHeartbeatAt → 앱 deriveDeviceHealth() → online/offline
  *
  * 대상 보드: ESP32-S3 DevKitC-1 (N16R8 등)
  * 필요 라이브러리: 없음 (ESP32 Arduino core 기본 WiFi / WiFiClientSecure / HTTPClient)
@@ -28,6 +30,11 @@ static unsigned long bootMillis         = 0;
 static int           lastPirState       = LOW;
 static unsigned long lastMotionSentMs   = 0;
 static unsigned long lastWifiAttemptMs  = 0;
+
+// heartbeat (Phase 4.1b)
+static unsigned long lastHeartbeatMs    = 0;
+static bool          heartbeatPending   = true;   // 부팅 후 첫 heartbeat 를 즉시 보낸다
+static bool          wasWifiConnected   = false;  // 재연결 감지용
 
 // ── Wi-Fi ───────────────────────────────────────────────────────────────
 void wifiConnect() {
@@ -118,6 +125,86 @@ int postEvent(const char *eventType) {
   return lastCode;
 }
 
+// ── Heartbeat (Phase 4.1b) ──────────────────────────────────────────────
+// devices/{id}.lastHeartbeatAt 만 갱신한다. events 문서는 만들지 않는다.
+// 반환: HTTP status code (>0), 또는 <0 전송 자체 실패
+int sendHeartbeat() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[HB] skip: WiFi not connected");
+    return -1;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();  // PoC: 인증서 검증 생략 (postEvent 와 동일)
+
+  String body = String("{\"deviceId\":\"") + DEVICE_ID + "\"}";
+
+  int lastCode = -1;
+  for (int attempt = 1; attempt <= HEARTBEAT_MAX_RETRIES; attempt++) {
+    HTTPClient http;
+    http.setTimeout(HTTP_TIMEOUT_MS);
+
+    if (!http.begin(client, HEARTBEAT_URL)) {
+      Serial.println("[HB] begin() failed");
+      lastCode = -1;
+    } else {
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("X-Device-Key", DEVICE_KEY);
+
+      Serial.printf("[HB] POST /device-heartbeat (attempt %d/%d)\n",
+                    attempt, HEARTBEAT_MAX_RETRIES);
+      lastCode = http.POST(body);
+
+      if (lastCode > 0) {
+        String resp = http.getString();
+        Serial.printf("[HB] %d %s\n", lastCode, resp.c_str());
+      } else {
+        Serial.printf("[HB] transport error: %s\n",
+                      http.errorToString(lastCode).c_str());
+      }
+      http.end();
+    }
+
+    if (lastCode >= 200 && lastCode < 300) return lastCode;
+    if (lastCode == 401 || lastCode == 403 || lastCode == 404) {
+      Serial.printf("[HB] failed: %d (config error, not retrying)\n", lastCode);
+      return lastCode;
+    }
+
+    Serial.printf("[HB] failed: %d\n", lastCode);
+    if (attempt < HEARTBEAT_MAX_RETRIES) delay(HEARTBEAT_RETRY_DELAY_MS);
+  }
+
+  Serial.println("[HB] giving up until next interval");
+  return lastCode;
+}
+
+// millis() 기반 non-blocking. loop() 의 짧은 폴링 구조를 유지한다.
+//   A) 부팅 후 Wi-Fi 연결되면 1회      (heartbeatPending 초기값 true)
+//   B) 이후 HEARTBEAT_INTERVAL_MS 마다
+//   C) Wi-Fi 가 끊겼다 다시 연결되면 최대한 빨리
+void handleHeartbeat() {
+  bool connected = (WiFi.status() == WL_CONNECTED);
+
+  // (C) 재연결 감지 — 최초 연결(lastHeartbeatMs==0)은 (A)가 처리하므로 제외
+  if (connected && !wasWifiConnected && lastHeartbeatMs != 0) {
+    heartbeatPending = true;
+    Serial.println("[HB] wifi reconnected, heartbeat queued");
+  }
+  wasWifiConnected = connected;
+  if (!connected) return;
+
+  unsigned long now = millis();
+  bool periodDue =
+      (lastHeartbeatMs != 0) && (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS);
+
+  if (heartbeatPending || periodDue) {
+    heartbeatPending = false;
+    lastHeartbeatMs = now;
+    sendHeartbeat();
+  }
+}
+
 // ── PIR ─────────────────────────────────────────────────────────────────
 void handlePir() {
   unsigned long now = millis();
@@ -179,7 +266,8 @@ void setup() {
 }
 
 void loop() {
-  wifiConnect();   // 끊기면 주기적으로 재연결 (내부에서 간격 제한)
-  handlePir();
-  delay(50);       // 짧은 폴링 간격
+  wifiConnect();      // 끊기면 주기적으로 재연결 (내부에서 간격 제한)
+  handlePir();        // 사람 활동 신호
+  handleHeartbeat();  // 기기 생존 신호 (Phase 4.1b, non-blocking)
+  delay(50);          // 짧은 폴링 간격
 }

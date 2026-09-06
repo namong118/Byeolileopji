@@ -1,7 +1,7 @@
 rules_version = '2';
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  별일없지 — Firestore 보안 규칙  (Phase 2.5 + Phase 4.1a)
+//  별일없지 — Firestore 보안 규칙  (Phase 2.5 + Phase 4.1a + Phase 4.1b)
 //
 //  ⚠️  DEVELOPMENT ONLY — NOT FOR PRODUCTION
 //
@@ -35,16 +35,17 @@ service cloud.firestore {
     match /devices/{deviceId} {
       allow read: if true;   // DEVELOPMENT ONLY
 
-      // Phase 4.1a — Worker(무인증)가 ingest 시 lastEventAt 만 갱신할 수 있게 허용.
+      // Phase 4.1a/4.1b — Worker(무인증)가 lastEventAt / lastHeartbeatAt 만 갱신 허용.
       //   ⚠️ DEVELOPMENT ONLY.
       //   핵심 레지스트리 필드(careRecipientId / enabled / type / location / name)는
-      //   클라이언트가 변경할 수 없다. 오직 lastEventAt 한 필드만.
-      //   Phase 4.1b 에서 heartbeat 도입 시 hasOnly 목록에 lastHeartbeatAt 등을 추가한다.
+      //   클라이언트가 변경할 수 없다. 오직 이 두 상태 필드만.
+      //     - lastEventAt      : /ingest-device-event 성공 시 (사람 활동 신호)
+      //     - lastHeartbeatAt  : /device-heartbeat 성공 시 (기기 생존 신호)
       //   실제 버전에서는 Worker 가 service-account 인증 → 이 규칙을 제거하고 `if false`.
       allow update: if request.resource.data
                         .diff(resource.data)
                         .affectedKeys()
-                        .hasOnly(['lastEventAt']);
+                        .hasOnly(['lastEventAt', 'lastHeartbeatAt']);
 
       allow create, delete: if false;
     }

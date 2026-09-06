@@ -33,7 +33,8 @@ export interface CareStatusConfig {
   overrideTtlMs: number;
   /**
    * heartbeat 가 이 시간(분) 이내면 기기 online, 초과면 offline.
-   * ⚠️ Phase 4.1a 에는 heartbeat 가 없어 실제로는 unknown 만 나온다. (Phase 4.1b 에서 활성)
+   * heartbeat 신호가 아직 없으면 unknown (deriveDeviceHealth 참고).
+   * 실기기 검증 시엔 EXPO_PUBLIC_DEVICE_OFFLINE_MINUTES=2 + 펌웨어 HEARTBEAT_INTERVAL_MS 30초 정도로.
    */
   deviceOfflineMinutes: number;
 }

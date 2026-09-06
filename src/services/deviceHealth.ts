@@ -3,13 +3,14 @@
  *
  * 입력은 "몇 개의 타임스탬프 + 설정"뿐. firebase / react import 없음 → 단독 테스트 가능.
  *
- * ⚠️ Phase 4.1a: 실제 heartbeat 메커니즘이 없다.
- *    lastHeartbeatAt 이 없으면(=heartbeat 신호가 아직 없음) **항상 unknown** 이다.
+ * 핵심 원칙:
+ *  - lastHeartbeatAt 이 없으면(=heartbeat 신호가 아직 없음) **항상 unknown** 이다.
  *    lastEventAt 이 아무리 오래돼도 offline 으로 판정하지 않는다.
  *    (사람이 오래 가만히 있는 것과 센서가 죽은 것을 heartbeat 없이 구분할 수 없기 때문)
+ *  - lastHeartbeatAt 이 있으면 config.deviceOfflineMinutes 기준으로 online/offline.
  *
- *    online / offline 은 lastHeartbeatAt 이 주어진 synthetic/unit test 에서만 나온다.
- *    실제 online/offline 판정은 Phase 4.1b (ESP32 heartbeat + /device-heartbeat) 에서 활성화된다.
+ * Phase 4.1b: ESP32 가 /device-heartbeat 로 주기적 heartbeat 를 보내면 Worker 가
+ *   devices/{id}.lastHeartbeatAt 을 갱신한다 → 이 함수가 online/offline 을 실제로 판정한다.
  */
 
 import type { DeviceHealth, DeviceHealthResult } from '../types/status';
@@ -17,9 +18,9 @@ import type { DeviceHealth, DeviceHealthResult } from '../types/status';
 export interface DeriveDeviceHealthInput {
   /** devices/{id} 문서가 존재하는가 */
   deviceDocExists: boolean;
-  /** devices/{id}.lastEventAt (ISO). Worker 가 ingest 시 갱신. */
+  /** devices/{id}.lastEventAt (ISO). Worker 가 /ingest-device-event 성공 시 갱신. */
   lastEventAt?: string;
-  /** devices/{id}.lastHeartbeatAt (ISO). Phase 4.1b. 없으면 heartbeat 신호 없음. */
+  /** devices/{id}.lastHeartbeatAt (ISO). Worker 가 /device-heartbeat 성공 시 갱신. 없으면 heartbeat 신호 없음. */
   lastHeartbeatAt?: string;
   /** heartbeat 가 이 시간(분) 이내면 online, 초과면 offline */
   config: { deviceOfflineMinutes: number };
@@ -69,7 +70,7 @@ export function deriveDeviceHealth(
   // heartbeat 신호가 아직 없음 → unknown (lastEventAt 이 오래돼도 offline 아님)
   if (lastHbMs == null) return unknown('no_heartbeat_capability');
 
-  // ── 아래는 heartbeat 신호가 있을 때만 도달 (Phase 4.1b) ──
+  // heartbeat 신호가 있으면 online/offline 판정
   const hbMinutes = Math.floor((nowMs - lastHbMs) / 60_000);
   if (hbMinutes <= input.config.deviceOfflineMinutes) {
     return { ...base, health: 'online', reason: 'heartbeat_fresh' };

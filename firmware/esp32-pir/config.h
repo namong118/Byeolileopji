@@ -27,5 +27,17 @@
 #define HTTP_MAX_RETRIES     3          // 즉시 무한 재시도 금지
 #define HTTP_RETRY_DELAY_MS  2000UL
 
+// ── Heartbeat (Phase 4.1b) ──────────────────────────────────────────────
+// ESP32 가 "살아있고 서버와 통신 가능함"을 주기적으로 알린다. 생활 이벤트가 아니다.
+// 서버는 devices/{id}.lastHeartbeatAt 만 갱신하고 events 문서는 만들지 않는다.
+//
+// 실사용 PoC 기본값: heartbeat 10분 / 앱 offline 임계 25분(EXPO_PUBLIC_DEVICE_OFFLINE_MINUTES).
+// ⚠️ 실기기 검증 시에는 아래 값을 30000UL(30초) 정도로 줄이고,
+//    앱 .env 의 EXPO_PUBLIC_DEVICE_OFFLINE_MINUTES 도 2 정도로 맞춰 빠르게 확인한다.
+//    (이 파일의 기본값을 30초로 커밋하지 않는다)
+#define HEARTBEAT_INTERVAL_MS     600000UL   // 10분
+#define HEARTBEAT_MAX_RETRIES     2          // heartbeat 실패는 다음 주기가 커버 — 재시도 최소
+#define HEARTBEAT_RETRY_DELAY_MS  1500UL
+
 // ── 로그 ────────────────────────────────────────────────────────────────
 #define SERIAL_BAUD 115200

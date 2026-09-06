@@ -52,7 +52,14 @@ Phase 4.1a ✅  기기 상태 축(Device Health) 분리 + 배관 (실기기/host
               ├─ ✅  Firestore rules (devices update = lastEventAt 만) — Console 게시 완료
               ├─ ✅  Hero 안전 규칙: 기기 offline → "오늘도 별일 없어요" 금지 — synthetic UI 수동 검증
               └─ ⚠️  heartbeat 미구현 → 실제 자동 deviceHealth 는 unknown (online/offline 자동 판정은 Phase 4.1b)
-Phase 4.1b ⏳  ESP32 heartbeat + /device-heartbeat → unknown → online/offline 실제 판정
+Phase 4.1b ✅  ESP32 heartbeat + /device-heartbeat → unknown → online/offline 실제 판정 (실기기 E2E 검증 완료)
+              ├─ ✅  Worker `/device-heartbeat` + firestore.rules + 펌웨어 heartbeat — 구현 완료
+              ├─ ✅  typecheck/lint/test:smoke(93건, worker+rules+firmware 정적) 전부 통과
+              ├─ ✅  Cloudflare Worker 배포 + Firebase Console rules 게시 + ESP32-S3 실기기 업로드 완료
+              ├─ ✅  ESP32 heartbeat HTTP 200 → devices.lastHeartbeatAt 실제 갱신 → 앱 online/heartbeat_fresh
+              ├─ ✅  ESP32 전원 차단 → offline/heartbeat_stale ("센서 연결을 확인하고 있어요") → 재연결 → online 자동 복귀
+              ├─ ✅  사람 축(NORMAL/CHECK) ↔ 기기 축(online/offline) 실기기에서 독립 동작 확인
+              └─ ⏳  HC-SR501 PIR 실물 센서 E2E 는 여전히 pending (PIR 미연결 floating motion 은 검증 결과에서 제외)
 Phase 4.3  ⏳  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
 Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
@@ -375,9 +382,9 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | --- | --- |
 | `npm run typecheck` (strict) | ✅ 통과 |
 | `npm run lint` | ✅ 통과 |
-| `npx expo-doctor` | ✅ 21/21 |
+| `npx expo-doctor` | ⚠️ 20/21 (`expo` 57.0.19 / `expo-router` 57.0.18 이 SDK 핀 `~57.0.20` / `~57.0.19` 과 패치 버전 불일치 — Phase 4.1b 와 무관, 별도 `npx expo install --check` 대상) |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 25 + 15 + 12 + 6 통과 (앱 매핑 11, endpoint+lastEventAt 25, 사람 축 15, 기기 축 12, rules 정적 6) |
+| `npm run test:smoke` | ✅ 11 + 38 + 15 + 14 + 6 + 9 = 93 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 14, rules 정적 6, firmware 정적 9) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
@@ -390,6 +397,14 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | **Phase 4.1a** Worker ingest → devices.lastEventAt best-effort PATCH (실패해도 201) | ✅ 자동 스모크 2건 · ✅ **Cloudflare 배포 + ESP32-S3 실기기 hosted 검증 완료** |
 | **Phase 4.1a** Firestore rules (`devices` update = `lastEventAt` 만) | ✅ **Firebase Console 게시 완료** · ⚠️ 자동 유닛 테스트는 미실시 (에뮬레이터/Java 없음 → 정적 구조 검사 `rules-check.mjs` 6건 + Console Playground 수동) |
 | **Phase 4.1a** 실제 자동 device online/offline 판정 | ⏳ heartbeat 미구현 → Phase 4.1b |
+| **Phase 4.1b** Worker `/device-heartbeat` (인증/검증/lastHeartbeatAt PATCH/events 미생성/write 실패 5xx) | ✅ 자동 스모크 13건 (fetch mock) · ✅ **Cloudflare 배포 + ESP32-S3 실기기 hosted 검증 완료** (HTTP 200) |
+| **Phase 4.1b** 기존 `/ingest-device-event` · `/health` 회귀 | ✅ 자동 스모크로 재확인 (동일 응답) |
+| **Phase 4.1b** `deriveDeviceHealth` heartbeat fresh→online / stale→offline / CHECK+online→CHECK UI | ✅ 자동 스모크 2건 (synthetic) · ✅ **실기기에서 online→offline→online 왕복 확인** |
+| **Phase 4.1b** `firestore.rules` devices update = `hasOnly(['lastEventAt','lastHeartbeatAt'])` | ✅ 코드 반영 + 정적 검사 6건 · ✅ **Firebase Console 게시 완료** |
+| **Phase 4.1b** 펌웨어 heartbeat (`sendHeartbeat`/`handleHeartbeat`, TEMP TEST·motion 경로 유지) | ✅ 정적 검사 9건 + xtensa-esp-elf-g++ 구문 검사 · ✅ **ESP32-S3 실기기 업로드 + `[HB] 200` 확인** |
+| **Phase 4.1b** 실기기 heartbeat E2E (heartbeat 로 online 유지 → 전원 차단 시 offline → 재연결 시 online) | ✅ **사용자 실기기 검증 완료** (테스트값: heartbeat 30초 / offline 임계 2분 / recompute 15초 — 전부 원복) |
+| **Phase 4.1b** 사람 축 CHECK 와 기기 축 offline 이 홈에서 혼동되지 않음 (CHECK ≠ 센서 offline) | ✅ **실기기 검증 완료** (전원 차단 시 "센서 연결을 확인하고 있어요" 로 정확히 전환) |
+| **Phase 4.1b** HC-SR501 PIR 실물 센서 → GPIO4 → heartbeat 와 병행 E2E | ⏳ **pending** (PIR 미연결. 이번에 관측된 floating `motion_detected` 는 검증 결과에서 제외) |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
 순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증·상태 판정·기기 판정)를 검증하고,
@@ -745,14 +760,107 @@ FCM 푸시 · Firebase Auth · Firestore rules 강화 · events enum 변경 → 
   항상 `unknown / no_heartbeat_capability` (정상). 실제 `online`/`offline` **자동** 판정은 Phase 4.1b.
 - `online`/`offline` 은 현재 synthetic(unit test) + 개발자 오버라이드로만 확인됨.
 
-### Phase 4.1b 에서 추가될 것
+---
 
-- Worker: `POST /device-heartbeat` 라우트 + `validateHeartbeatRequest` + `touchDevice({ lastHeartbeatAt, lastBootAt?, lastReason? })`
-- `firestore.rules`: `hasOnly(['lastEventAt', 'lastHeartbeatAt', 'lastBootAt', 'lastReason'])` 로 확장
-- 펌웨어(`esp32-pir.ino`): `sendHeartbeat()` — 부팅/주기(≈10분)/재연결 시 전송 (**PIR TEMP TEST 무변경**)
-- `secrets.example.h`: `HEARTBEAT_URL` (또는 `INGEST_URL` 에서 경로 치환)
-- `deriveDeviceHealth`: `lastHeartbeatAt` 이 채워지므로 `unknown` → `online`/`offline` 실제 전환
-- 실기기 검증: heartbeat 로 조용한 시간에도 `online` 유지 (CHECK ≠ 센서 offline) / 분리 후 `offline`
+## Phase 4.1b — ESP32 Heartbeat (구현 + 실기기 E2E 검증 완료)
+
+`deviceHealth` 를 `unknown` → 실제 `online`/`offline` 로 전환한다. Phase 4.1a 의 판정 구조
+(`deriveDeviceHealth`, `presentHome`, 두 축 분리)를 그대로 재사용하며 앱 로직은 **한 줄도
+바뀌지 않았다** — heartbeat 데이터가 채워지는 순간 자동으로 online/offline 판정이 시작된다.
+
+> ✅ **Cloudflare Worker 배포 · Firebase Console `firestore.rules` 게시 · ESP32-S3 실기기 업로드
+> 모두 완료했고, 아래 "실기기 E2E 검증 완료" 절차대로 online → offline → online 왕복을
+> 실물 하드웨어로 확인했다.**  (HC-SR501 PIR 실물 센서 구간만 여전히 pending.)
+
+### Heartbeat 정책
+
+- **필수 필드는 `lastHeartbeatAt` 하나뿐.** `lastBootAt`/`lastReason`/RSSI 등은 YAGNI 로 이번엔 추가하지 않았다.
+- heartbeat 는 `events` 컬렉션에 문서를 만들지 않는다. `devices/{deviceId}` 상태 필드만 갱신.
+- 기본값(전부 `config.h`/env 로 조정 가능):
+
+| 값 | 기본 | 조정 |
+| --- | --- | --- |
+| heartbeat 주기 | 10분 | 펌웨어 `config.h` `HEARTBEAT_INTERVAL_MS` |
+| 기기 offline 임계 | 25분 | 앱 `EXPO_PUBLIC_DEVICE_OFFLINE_MINUTES` |
+
+> 실기기 검증 시엔 `HEARTBEAT_INTERVAL_MS`(config.h) 를 `30000UL`(30초) 정도로,
+> `EXPO_PUBLIC_DEVICE_OFFLINE_MINUTES`(.env) 를 `2` 정도로 **로컬에서만** 바꿔 빠르게 확인하고,
+> **커밋하지 않는다.** 실사용 기본값(10분/25분)은 그대로 코드에 남긴다.
+
+### Worker `POST /device-heartbeat`
+
+- 인증은 기존 `X-Device-Key` **그대로** 재사용 (`DEVICE_KEY` 구조 무변경).
+- 검증은 새 `validateHeartbeatRequest`/`validateHeartbeatDevice` (작은 별도 함수 —
+  기존 `validateRequest`/`validateDevice` 의 eventType 의미를 억지로 맞추지 않음).
+- 성공: `devices/{deviceId}.lastHeartbeatAt` = 서버 시각, **`events` 미생성**, `200 OK`.
+- **best-effort 아님**: `lastHeartbeatAt` 갱신 실패 시 `502`/`500` (ingest 의 `lastEventAt` 은
+  best-effort 였지만, heartbeat 는 갱신 자체가 목적이므로 실패를 성공으로 위장하지 않는다).
+- `touchDevice()` 재사용 (Phase 4.1a 헬퍼, 변경 없음) — `{ lastHeartbeatAt: Date }` 로 호출.
+- `/health`, `/ingest-device-event` 응답/동작 **불변** (스모크로 재확인).
+
+### Firestore rules (코드 반영 + Console 게시 완료)
+
+```
+allow update: if request.resource.data.diff(resource.data)
+                  .affectedKeys().hasOnly(['lastEventAt', 'lastHeartbeatAt']);
+```
+
+`careRecipientId`/`enabled`/`type`/`location`/`name` 여전히 변경 불가. `create`/`delete` 금지 유지.
+**✅ Firebase Console 에 실제 재게시 완료** — heartbeat 가 `devices/{id}.lastHeartbeatAt` 을
+정상적으로 PATCH 하는 것을 실기기로 확인했다. (게시 전이었다면 heartbeat 는 best-effort 가
+아니므로 `firestore_write_failed`(502) 로 명확히 실패했을 것이다.)
+
+### 펌웨어 (`esp32-pir.ino`, 전부 additive)
+
+- 신규: `sendHeartbeat()`(POST, 최대 2회 재시도), `handleHeartbeat()`(millis 기반 non-blocking)
+- 전송 시점: **A)** 부팅 후 Wi-Fi 연결 시 1회, **B)** 이후 `HEARTBEAT_INTERVAL_MS` 마다,
+  **C)** Wi-Fi 재연결 시 즉시 (busy-loop 없음, 무한 재시도 없음)
+- `loop()` 에 `handleHeartbeat();` 한 줄 추가한 것 외 **`wifiConnect()`/`handlePir()`/`postEvent()`/
+  `setup()`/PIR TEMP TEST 는 전부 그대로.**
+- motion 과 heartbeat 는 의미상 분리(사람 신호 vs 기기 신호)만 하고, coalescing(motion 있으면
+  heartbeat 생략) 같은 최적화는 이번 단계에서 하지 않았다 — 필요하면 향후 최적화 대상.
+
+### 앱
+
+- **변경 없음.** `deriveDeviceHealth`(4.1a) 가 이미 `lastHeartbeatAt` 을 받아 online/offline 을
+  판정하도록 작성돼 있었고, `deviceRepository.ts` 도 이미 그 필드를 매핑한다.
+- heartbeat 가 들어오기 시작하면: `lastHeartbeatAt` 신선(≤25분) → `online` / 초과 → `offline`.
+- 안전 규칙 그대로 유지: EMERGENCY 최우선, 기기 offline 이면 "오늘도 별일 없어요" 금지,
+  **사람 CHECK + 기기 online** 은 정상적으로 "한번 확인해 주세요" (CHECK ≠ 센서 offline).
+
+### 실기기 E2E 검증 완료 (사용자)
+
+배포: **Cloudflare Worker `npx wrangler deploy` 완료** · **Firebase Console `firestore.rules`
+재게시 완료** · **ESP32-S3 DevKitC-1 에 Phase 4.1b 펌웨어 업로드 완료** · `secrets.h` 에
+`HEARTBEAT_URL` 추가 (사용자 직접, git 무시됨).
+
+검증 시 임시로 `HEARTBEAT_INTERVAL_MS` 30초 / `EXPO_PUBLIC_DEVICE_OFFLINE_MINUTES` 2분 /
+`EXPO_PUBLIC_STATUS_RECOMPUTE_INTERVAL_MS` 15초 로 낮춰 빠르게 관찰한 뒤 **세 값 모두 원복**
+(코드 기본값 heartbeat 10분 / offline 25분 유지, `.env` 는 커밋 안 함).
+
+**[heartbeat 정상 경로]**
+1. ESP32-S3 → `POST /device-heartbeat` → **HTTP 200** (`[HB] 200 {"ok":true,...}`)
+2. Firebase Console `devices/dev-device-livingroom.lastHeartbeatAt` **필드 실제 생성/갱신 확인**
+3. 별일없지 앱 개발자 탭 > Device Health → **`derived health = online` / `reason = heartbeat_fresh`**
+
+**[online → offline → online 왕복]**
+4. ESP32-S3 USB 전원 분리 → heartbeat 중단
+5. offline 임계(테스트값 2분) 경과 → 앱이 **`offline` / `heartbeat_stale`** 로 자동 전환
+   → 홈 Hero 가 **"센서 연결을 확인하고 있어요"** 로 표시 (사람 축이 아니라 기기 축 문구)
+6. ESP32-S3 USB 재연결 → heartbeat 재개 → **`online` / `heartbeat_fresh` 자동 복귀**
+   → **`ONLINE → 전원 차단 → OFFLINE → 재연결 → ONLINE` 왕복 E2E 실기기 검증 완료**
+
+**[사람 축 / 기기 축 독립 — 실기기 확인]**
+7. 기기 축이 `online`/`offline` 로 바뀌는 동안 사람 축(`NORMAL`/`CHECK`)은 별개로 계산됨.
+   기기 offline 이어도 사람 축 문구가 "오늘도 별일 없어요" 로 오염되지 않고,
+   기기 online 이어도 사람 CHECK 는 "한번 확인해 주세요" 로 정상 표시됨 (`CHECK ≠ 센서 offline`).
+
+**[아직 pending]**
+- **HC-SR501 PIR 실물 센서 → GPIO4 → `handlePir()` 상승 에지** 경로는 미검증 (PIR 미연결).
+- 이번 USB 분리/재연결 중 관측된 `motion_detected` 는 **GPIO4 floating 가능성**이 있어
+  **PIR 실물 E2E 성공으로 기록하지 않는다.** (heartbeat 는 PIR 입력과 무관하게 타이머로만 전송)
+- `esp32-pir.ino` 의 **TEMP TEST 블록(부팅당 `motion_detected` 1회)은 아직 유지** —
+  PIR 실물 센서 E2E 검증 시 함께 제거 예정.
 
 ---
 

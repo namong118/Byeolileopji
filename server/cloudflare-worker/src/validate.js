@@ -94,3 +94,38 @@ export function validateDevice(device, eventType) {
   }
   return { ok: true };
 }
+
+// ── Phase 4.1b: heartbeat 전용 검증 ────────────────────────────────────
+//
+// heartbeat 는 생활 이벤트가 아니라 "기기 생존 신호" 다. eventType 이 없다.
+// ingest 의 validateRequest 의미를 억지로 맞추지 않고 작은 별도 함수를 둔다.
+
+/**
+ * heartbeat 요청 검증 (method / X-Device-Key / JSON / deviceId).
+ * @returns {{ok:true, deviceId:string} | {ok:false, status:number, error:string}}
+ */
+export function validateHeartbeatRequest({ method, deviceKeyHeader, body }, { expectedDeviceKey }) {
+  if (method !== 'POST') return fail(405, 'method_not_allowed');
+  if (!expectedDeviceKey) return fail(500, 'server_misconfigured_no_device_key');
+  if (!safeEqual(deviceKeyHeader || '', expectedDeviceKey)) {
+    return fail(401, 'invalid_device_key');
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return fail(400, 'invalid_json_body');
+  }
+  const { deviceId } = body;
+  if (typeof deviceId !== 'string' || deviceId.trim() === '') {
+    return fail(400, 'missing_deviceId');
+  }
+  return { ok: true, deviceId: deviceId.trim() };
+}
+
+/**
+ * heartbeat 용 device 검증 — 존재 / enabled 만 확인한다.
+ * (careRecipientId / type / eventType 제약은 heartbeat 에 해당 없음)
+ */
+export function validateHeartbeatDevice(device) {
+  if (!device) return fail(404, 'device_not_found');
+  if (device.enabled !== true) return fail(403, 'device_disabled');
+  return { ok: true };
+}

@@ -15,6 +15,8 @@ import assert from 'node:assert/strict';
 import {
   validateRequest,
   validateDevice,
+  validateHeartbeatRequest,
+  validateHeartbeatDevice,
   safeEqual,
   ALLOWED_EVENT_TYPES,
 } from '../server/cloudflare-worker/src/validate.js';
@@ -229,15 +231,16 @@ check('worker index.js: 핸들러 export 정상', () => {
 //     POST /events         → 생성된 문서
 //     PATCH /devices/{id}?updateMask.fieldPaths=lastEventAt → lastEventAt touch
 //
-function mockFirestore({ failTouch = false } = {}) {
+function mockFirestore({ failWrite = false, deviceMissing = false, deviceDisabled = false } = {}) {
   const calls = [];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const method = opts.method || 'GET';
-    calls.push({ url: u, method });
+    calls.push({ url: u, method, body: opts.body ? JSON.parse(opts.body) : undefined });
 
     if (u.includes('/devices/') && method === 'GET') {
+      if (deviceMissing) return new Response('{}', { status: 404 });
       return new Response(
         JSON.stringify({
           name: 'projects/p/databases/(default)/documents/devices/dev-device-livingroom',
@@ -246,7 +249,7 @@ function mockFirestore({ failTouch = false } = {}) {
             name: '거실 센서',
             type: 'ESP32_PIR',
             location: '거실',
-            enabled: true,
+            enabled: !deviceDisabled,
           }),
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
@@ -259,7 +262,7 @@ function mockFirestore({ failTouch = false } = {}) {
       );
     }
     if (u.includes('/devices/') && method === 'PATCH') {
-      if (failTouch) return new Response('permission denied', { status: 403 });
+      if (failWrite) return new Response('permission denied', { status: 403 });
       return new Response(JSON.stringify({ name: 'projects/p/.../devices/dev-device-livingroom' }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -275,24 +278,34 @@ function mockFirestore({ failTouch = false } = {}) {
   };
 }
 
-const INGEST_ENV = { FIREBASE_PROJECT_ID: 'p', DEVICE_KEY: KEY };
+const WORKER_ENV = { FIREBASE_PROJECT_ID: 'p', DEVICE_KEY: KEY };
 const ingestReq = () =>
   new Request('https://w.example/ingest-device-event', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-device-key': KEY },
     body: JSON.stringify({ deviceId: 'dev-device-livingroom', eventType: 'motion_detected' }),
   });
+const heartbeatReq = (over = {}) =>
+  new Request('https://w.example/device-heartbeat', {
+    method: over.method ?? 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(over.noKey ? {} : { 'x-device-key': over.key ?? KEY }),
+    },
+    body: JSON.stringify(over.body ?? { deviceId: 'dev-device-livingroom' }),
+  });
 
+// ── ingest (Phase 4.1a) 회귀 ──────────────────────────────────────────
 check('4.1a: ingest 성공 → events 생성 후 devices lastEventAt PATCH 시도', async () => {
   const m = mockFirestore();
   try {
-    const res = await workerHandler.fetch(ingestReq(), INGEST_ENV);
+    const res = await workerHandler.fetch(ingestReq(), WORKER_ENV);
     assert.equal(res.status, 201);
     const patch = m.calls.find((c) => c.method === 'PATCH');
     assert.ok(patch, 'PATCH 호출이 있어야 한다');
     assert.ok(patch.url.includes('/devices/dev-device-livingroom'));
     assert.ok(patch.url.includes('updateMask.fieldPaths=lastEventAt'));
-    // events POST 가 PATCH 보다 먼저
+    assert.ok(!patch.url.includes('lastHeartbeatAt')); // ingest 는 heartbeat 안 건드림
     const order = m.calls.map((c) => c.method);
     assert.ok(order.indexOf('POST') < order.indexOf('PATCH'));
   } finally {
@@ -301,16 +314,169 @@ check('4.1a: ingest 성공 → events 생성 후 devices lastEventAt PATCH 시�
 });
 
 check('4.1a: lastEventAt PATCH 실패해도 ingest 는 201 유지 (best-effort)', async () => {
-  const m = mockFirestore({ failTouch: true });
+  const m = mockFirestore({ failWrite: true });
   try {
-    const res = await workerHandler.fetch(ingestReq(), INGEST_ENV);
+    const res = await workerHandler.fetch(ingestReq(), WORKER_ENV);
     assert.equal(res.status, 201);
-    const body = await res.json();
-    assert.equal(body.ok, true);
-    assert.ok(m.calls.some((c) => c.method === 'PATCH')); // 시도는 했다
+    assert.equal((await res.json()).ok, true);
+    assert.ok(m.calls.some((c) => c.method === 'PATCH'));
   } finally {
     m.restore();
   }
+});
+
+// ── /device-heartbeat (Phase 4.1b) ───────────────────────────────────
+check('4.1b: heartbeat 정상 → 200 { ok:true, deviceId, lastHeartbeatAt }', async () => {
+  const m = mockFirestore();
+  try {
+    const res = await workerHandler.fetch(heartbeatReq(), WORKER_ENV);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.deviceId, 'dev-device-livingroom');
+    assert.ok(typeof body.lastHeartbeatAt === 'string');
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat → events 문서 생성 안 함', async () => {
+  const m = mockFirestore();
+  try {
+    await workerHandler.fetch(heartbeatReq(), WORKER_ENV);
+    assert.ok(!m.calls.some((c) => /\/events/.test(c.url) && c.method === 'POST'));
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat → devices lastHeartbeatAt 만 PATCH', async () => {
+  const m = mockFirestore();
+  try {
+    await workerHandler.fetch(heartbeatReq(), WORKER_ENV);
+    const patch = m.calls.find((c) => c.method === 'PATCH');
+    assert.ok(patch);
+    assert.ok(patch.url.includes('updateMask.fieldPaths=lastHeartbeatAt'));
+    assert.ok(!patch.url.includes('lastEventAt'));
+    assert.ok(patch.body.fields.lastHeartbeatAt.timestampValue);
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat X-Device-Key 없음 → 401', async () => {
+  const m = mockFirestore();
+  try {
+    const res = await workerHandler.fetch(heartbeatReq({ noKey: true }), WORKER_ENV);
+    assert.equal(res.status, 401);
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat 잘못된 key → 401', async () => {
+  const m = mockFirestore();
+  try {
+    const res = await workerHandler.fetch(heartbeatReq({ key: 'wrong' }), WORKER_ENV);
+    assert.equal(res.status, 401);
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat deviceId 없음 → 400', async () => {
+  const m = mockFirestore();
+  try {
+    const res = await workerHandler.fetch(heartbeatReq({ body: {} }), WORKER_ENV);
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error, 'missing_deviceId');
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat 존재하지 않는 device → 404', async () => {
+  const m = mockFirestore({ deviceMissing: true });
+  try {
+    const res = await workerHandler.fetch(heartbeatReq(), WORKER_ENV);
+    assert.equal(res.status, 404);
+    assert.equal((await res.json()).error, 'device_not_found');
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat disabled device → 403', async () => {
+  const m = mockFirestore({ deviceDisabled: true });
+  try {
+    const res = await workerHandler.fetch(heartbeatReq(), WORKER_ENV);
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).error, 'device_disabled');
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: heartbeat Firestore write 실패 → 5xx (best-effort 아님)', async () => {
+  const m = mockFirestore({ failWrite: true });
+  try {
+    const res = await workerHandler.fetch(heartbeatReq(), WORKER_ENV);
+    assert.ok(res.status >= 500 && res.status < 600, `status=${res.status}`);
+    assert.equal((await res.json()).error, 'firestore_write_failed');
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: 기존 ingest-device-event 회귀 없음 (heartbeat 추가 후에도 201)', async () => {
+  const m = mockFirestore();
+  try {
+    const res = await workerHandler.fetch(ingestReq(), WORKER_ENV);
+    assert.equal(res.status, 201);
+    assert.equal((await res.json()).eventType, 'motion_detected');
+  } finally {
+    m.restore();
+  }
+});
+
+check('4.1b: GET /health 응답 불변', async () => {
+  const res = await workerHandler.fetch(
+    new Request('https://w.example/health', { method: 'GET' }),
+    WORKER_ENV,
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.endpoint, '/ingest-device-event');
+});
+
+// ── validateHeartbeatRequest / validateHeartbeatDevice 순수 검증 ──────
+check('validateHeartbeatRequest: 정상 / GET 405 / key 없음 401 / deviceId 없음 400', () => {
+  assert.deepEqual(
+    validateHeartbeatRequest(
+      { method: 'POST', deviceKeyHeader: KEY, body: { deviceId: 'd' } },
+      { expectedDeviceKey: KEY },
+    ),
+    { ok: true, deviceId: 'd' },
+  );
+  assert.equal(
+    validateHeartbeatRequest({ method: 'GET', deviceKeyHeader: KEY, body: {} }, { expectedDeviceKey: KEY }).status,
+    405,
+  );
+  assert.equal(
+    validateHeartbeatRequest({ method: 'POST', deviceKeyHeader: null, body: { deviceId: 'd' } }, { expectedDeviceKey: KEY }).status,
+    401,
+  );
+  assert.equal(
+    validateHeartbeatRequest({ method: 'POST', deviceKeyHeader: KEY, body: {} }, { expectedDeviceKey: KEY }).error,
+    'missing_deviceId',
+  );
+});
+
+check('validateHeartbeatDevice: null 404 / disabled 403 / 정상 ok', () => {
+  assert.equal(validateHeartbeatDevice(null).status, 404);
+  assert.equal(validateHeartbeatDevice({ enabled: false }).status, 403);
+  assert.deepEqual(validateHeartbeatDevice({ enabled: true }), { ok: true });
 });
 
 // ── run ────────────────────────────────────────────────────────────────

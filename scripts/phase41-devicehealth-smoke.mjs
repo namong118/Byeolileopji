@@ -162,8 +162,33 @@ check('9b. 사람 no_data + device online → 여전히 "아직 활동 정보가
   assert.equal(t.headline, '아직 활동 정보가 없어요');
 });
 
+// ── 10. (Phase 4.1b) 사람 CHECK + device online → 사람 활동 확인 UI ────
+//    CHECK 와 offline 을 혼동하지 않는다: 센서는 살아있고 사람이 조용한 것.
+check('10. 사람 CHECK(inactivity) + device online → "한번 확인해 주세요" (CHECK UI 유지)', () => {
+  const t = presentHome(
+    personStatus({ status: 'CHECK', reason: 'inactivity', minutesSinceActivity: 200, lastActivityAt: minAgo(200) }),
+    'online',
+    NOW,
+  );
+  assert.equal(t.tone, 'check');
+  assert.equal(t.headline, '한번 확인해 주세요');
+  assert.notEqual(t.headline, '센서 연결을 확인하고 있어요');
+});
+
+check('10b. deriveDeviceHealth: lastEventAt 신선 + heartbeat 없음 → 여전히 unknown', () => {
+  // heartbeat 도입 후에도, 특정 기기가 아직 heartbeat 를 안 보냈으면 unknown 이어야 한다
+  const r = deriveDeviceHealth({
+    deviceDocExists: true,
+    lastEventAt: minAgo(1),
+    config: cfg,
+    now: NOW,
+  });
+  assert.equal(r.health, 'unknown');
+  assert.equal(r.reason, 'no_heartbeat_capability');
+});
+
 // ── run ────────────────────────────────────────────────────────────────
-console.log('Phase 4.1a device-health smoke test');
+console.log('Phase 4.1a/4.1b device-health smoke test');
 let passed = 0;
 for (const { name, fn } of tests) {
   await fn();

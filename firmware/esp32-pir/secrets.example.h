@@ -16,5 +16,8 @@
 // Cloudflare Worker 에 등록한 DEVICE_KEY 와 동일해야 한다.
 #define DEVICE_KEY     "YOUR_DEVICE_KEY"
 
-// 배포된 Worker URL + "/ingest-device-event"
-#define INGEST_URL     "https://byeolileopji-ingest.YOUR-SUBDOMAIN.workers.dev/ingest-device-event"
+// 배포된 Worker URL + 경로.
+#define INGEST_URL     "https://byeolileopji-ingest.byeolileopji.workers.dev/ingest-device-event"
+
+// Phase 4.1b — heartbeat endpoint. 같은 Worker, 경로만 다름.
+#define HEARTBEAT_URL  "https://byeolileopji-ingest.byeolileopji.workers.dev/device-heartbeat"

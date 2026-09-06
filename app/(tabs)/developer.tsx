@@ -139,9 +139,9 @@ export default function DeveloperScreen() {
         />
       </Card>
       <Text style={styles.note}>
-        Phase 4.1a: 아직 heartbeat 가 없어 실제 판정은 항상 unknown /
-        no_heartbeat_capability 입니다. (lastEventAt 이 오래돼도 offline 으로 판정하지
-        않습니다.) online/offline 실제 판정은 Phase 4.1b 에서 활성화됩니다.
+        heartbeat 신호(lastHeartbeatAt)가 없으면 항상 unknown /
+        no_heartbeat_capability 입니다 (lastEventAt 이 오래돼도 offline 아님). ESP32 가
+        /device-heartbeat 를 보내기 시작하면 online / offline 으로 자동 전환됩니다.
       </Text>
       <View style={styles.statusRow}>
         {DEVICE_HEALTH_BUTTONS.map((btn) => (

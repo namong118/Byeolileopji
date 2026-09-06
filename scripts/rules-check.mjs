@@ -33,16 +33,14 @@ check('전체 DB 와일드카드(match /{document=**}) 를 쓰지 않는다', ()
   assert.ok(!/match\s+\/\{document=\*\*\}/.test(src));
 });
 
-check('devices update 는 lastEventAt 만 허용 (hasOnly)', () => {
-  // devices 블록 추출
+check('devices update 는 lastEventAt / lastHeartbeatAt 만 허용 (hasOnly)', () => {
   const m = src.match(/match \/devices\/\{deviceId\}\s*{([\s\S]*?)\n {4}}/);
   assert.ok(m, 'devices 블록을 찾을 수 없음');
   const block = m[1];
   assert.ok(/allow update:/.test(block), 'devices update 규칙 없음');
-  assert.ok(
-    /hasOnly\(\[\s*'lastEventAt'\s*\]\)/.test(block),
-    "devices update 는 hasOnly(['lastEventAt']) 이어야 함",
-  );
+  assert.ok(/hasOnly\(\[[^\]]*\]\)/.test(block), 'devices update 는 hasOnly 여야 함');
+  assert.ok(/'lastEventAt'/.test(block), 'lastEventAt 허용 없음');
+  assert.ok(/'lastHeartbeatAt'/.test(block), 'lastHeartbeatAt 허용 없음 (Phase 4.1b)');
   assert.ok(/allow create, delete: if false/.test(block));
 });
 
@@ -61,7 +59,7 @@ check('devices 핵심 레지스트리 필드는 어떤 allow 목록에도 없다
       `핵심 필드 ${core} 가 클라이언트 변경 허용 목록에 있음`,
     );
   }
-  assert.deepEqual([...allowedFields].sort(), ['lastEventAt']);
+  assert.deepEqual([...allowedFields].sort(), ['lastEventAt', 'lastHeartbeatAt']);
 });
 
 check('careRecipients / events update·delete 는 여전히 잠겨 있다', () => {

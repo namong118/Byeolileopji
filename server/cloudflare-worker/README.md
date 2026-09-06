@@ -1,16 +1,21 @@
-# 별일없지 — 디바이스 이벤트 ingest Worker
+# 별일없지 — 디바이스 Worker
 
 ```
-ESP32-S3  →  HTTPS POST /ingest-device-event  →  이 Worker  →  Firestore events
+ESP32-S3  →  HTTPS POST /ingest-device-event  →  이 Worker  →  Firestore events   (사람 활동 신호)
+          →  HTTPS POST /device-heartbeat      →  이 Worker  →  devices.lastHeartbeatAt  (기기 생존 신호)
                                                                      ↓ onSnapshot
                                                                 별일없지 App
 ```
 
-> **hosted 검증 완료:** Worker 배포 · `GET /health` · `X-Device-Key` 인증 ·
-> `POST /ingest-device-event` → HTTP 201 · `devices/dev-device-livingroom` 조회 ·
-> `events` 문서 생성 · Expo 앱 `onSnapshot` 실시간 반영까지 실제 확인됨.
-> **실물 ESP32-S3 DevKitC-1 에서도 확인됨** (실기기 Wi-Fi → 이 Worker → 인증 → Firestore → 앱).
-> 남은 것은 HC-SR501 PIR → GPIO4 → ESP32 구간 (`../../firmware/esp32-pir/README.md`).
+> **hosted 검증 완료 (Phase 4.1b 까지):** Worker 배포 · `GET /health` · `X-Device-Key` 인증 ·
+> `POST /ingest-device-event` → HTTP 201 · `POST /device-heartbeat` → **HTTP 200** ·
+> `devices/dev-device-livingroom` 조회 · `events` 문서 생성 · `devices.lastEventAt` best-effort 갱신 ·
+> **`devices.lastHeartbeatAt` PATCH** · Expo 앱 `onSnapshot` 실시간 반영까지
+> **실물 ESP32-S3 DevKitC-1 로 실제 확인됨.**
+>
+> **Phase 4.1b (`/device-heartbeat`): Cloudflare 배포 완료 + `firestore.rules` Console 게시 완료 +
+> ESP32-S3 실기기 heartbeat E2E 검증 완료** (heartbeat 로 `online` → 전원 차단 시 `offline` →
+> 재연결 시 `online` 자동 복귀 왕복 확인). HC-SR501 PIR 실물 센서 구간만 여전히 pending.
 
 ## 왜 Cloudflare Workers 인가
 
@@ -72,9 +77,42 @@ ESP32-S3  →  HTTPS POST /ingest-device-event  →  이 Worker  →  Firestore 
 | `500` | `server_misconfigured_no_device_key` |
 | `502` | `firestore_lookup_failed` / `firestore_write_failed` |
 
+### `POST /device-heartbeat` (Phase 4.1b)
+
+기기 생존 신호. **`events` 문서를 만들지 않는다.** `X-Device-Key` 인증은 ingest 와 동일하게 재사용.
+
+**Body**
+
+```json
+{ "deviceId": "dev-device-livingroom" }
+```
+
+**처리**
+
+1. `X-Device-Key` 검증
+2. body / `deviceId` 검증 (`validateHeartbeatRequest` — eventType 없음, ingest 와 별도 함수)
+3. Firestore `devices/{deviceId}` 조회 → 존재 / `enabled == true`
+4. `devices/{deviceId}.lastHeartbeatAt` = 서버 시각으로 PATCH
+
+**응답**
+
+| 상태 | 의미 |
+| --- | --- |
+| `200` | `{ ok:true, deviceId, lastHeartbeatAt }` |
+| `400` | `invalid_json_body` / `missing_deviceId` |
+| `401` | `invalid_device_key` |
+| `403` | `device_disabled` |
+| `404` | `device_not_found` |
+| `405` | `method_not_allowed` |
+| `500` | `server_misconfigured_no_device_key` / `firestore_write_failed` |
+| `502` | `firestore_lookup_failed` / `firestore_write_failed` |
+
+> ⚠️ ingest 의 `lastEventAt` 갱신은 **best-effort**(실패해도 201)였지만, heartbeat 는
+> `lastHeartbeatAt` 갱신 자체가 목적이므로 **write 실패 시 5xx 를 그대로 반환한다.**
+
 ### `GET /health`
 
-`{ ok: true, service: "byeolileopji-ingest" }`
+`{ ok: true, service: "byeolileopji-ingest" }` (Phase 4.1b 로 변경 없음)
 
 ## 배포
 
@@ -92,7 +130,13 @@ npx wrangler deploy
 #  → https://byeolileopji-ingest.<your-subdomain>.workers.dev 게시
 ```
 
-배포 후 나온 URL 뒤에 `/ingest-device-event` 를 붙인 것이 ESP32 `INGEST_URL`.
+배포 후 나온 URL 뒤에 `/ingest-device-event`, `/device-heartbeat` 를 붙인 것이 각각
+ESP32 `INGEST_URL`, `HEARTBEAT_URL`.
+
+> Phase 4.1b 재배포 시 **새 secret 이 필요 없다.** `/device-heartbeat` 도 기존 `DEVICE_KEY` 를
+> 그대로 쓴다. `npx wrangler deploy` 한 번이면 두 endpoint 가 함께 갱신된다.
+> 단, **`firestore.rules` 를 Firebase Console 에 먼저(또는 함께) 재게시해야** heartbeat 가
+> `lastHeartbeatAt` 을 실제로 쓸 수 있다 — 게시 전엔 `502/500 firestore_write_failed`.
 
 ## 로컬 개발
 
@@ -135,6 +179,26 @@ curl.exe -i -X POST "<URL>/ingest-device-event" `
 
 성공하면 `201` + `eventId`, 그리고 **별일없지 앱의 홈/타임라인에 몇 초 내 자동으로**
 "거실에서 활동이 확인됐어요." 가 나타난다 (앱이 Firebase 에 연결된 상태여야 함).
+
+**heartbeat 테스트 (Phase 4.1b)** — `<KEY>`/`<URL>` 동일:
+
+```bash
+curl -i -X POST "<URL>/device-heartbeat" \
+  -H "Content-Type: application/json" \
+  -H "X-Device-Key: <KEY>" \
+  -d '{"deviceId":"dev-device-livingroom"}'
+```
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "<URL>/device-heartbeat" `
+  -ContentType "application/json" `
+  -Headers @{ "X-Device-Key" = "<KEY>" } `
+  -Body '{"deviceId":"dev-device-livingroom"}'
+```
+
+성공하면 `200` + `lastHeartbeatAt`. Firebase Console `devices/dev-device-livingroom` 문서에
+`lastHeartbeatAt` 필드가 생기고, 별일없지 앱 **개발자 탭 > Device Health** 의
+`derived health` 가 `online`/`heartbeat_fresh` 로 바뀐다. (`events` 컬렉션엔 아무것도 안 생김)
 
 ## ⚠️ 보안 경고 — DEVELOPMENT / POC, NOT PRODUCTION READY
 
