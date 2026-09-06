@@ -65,7 +65,16 @@ Home UX A–D ✅  보호자 홈 화면 정보구조 압축 (판정 로직·개�
               ├─ ✅  복약·워치·평상시 SOS·외출/귀가·중복 offline 경고·별도 offline 문장 홈에서 제거
               ├─ ✅  오전/오후 12시간 표기 통일 · "오늘 활동" = 생활 움직임(모션/문/외출/귀가) 전용 집계
               └─ ✅  날짜 경계(자정 넘김) 실기기 확인 — 전날 lastActivity 유지 / 당일 활동·기록 0건 독립 표시
-Phase 4.3  ⏳  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
+Phase 4.3  🚧  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
+              ├─ ✅  STEP A — 서버 재사용 가능한 순수 판정 코어 `computeCareStatusSnapshot`
+              │       (deriveCareStatus + deriveDeviceHealth 조합, threshold 주입, now 주입,
+              │        client↔server parity 스모크, Firestore write·cron·deploy 없음)
+              ├─ ✅  STEP B-1 — Firestore READ → normalize → 공유 코어 compute
+              │       (Worker `firestoreRead.js` + `careStatusReader.js`, events `:runQuery`
+              │        + devices point read, **READ ONLY**, 실제 dev Firestore READ 검증 완료)
+              ├─ ⏳  STEP B-2 — careStatus 스냅샷 스키마 + Firestore write + 운영 threshold
+              ├─ ⏳  STEP B-3 — 이전 스냅샷 비교 → 상태 전환 감지
+              └─ ⏳  STEP B-4 — `wrangler.toml` cron + `scheduled()` deploy
 Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
@@ -387,9 +396,9 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | --- | --- |
 | `npm run typecheck` (strict) | ✅ 통과 |
 | `npm run lint` | ✅ 통과 |
-| `npx expo-doctor` | ⚠️ 20/21 (`expo` 57.0.19 / `expo-router` 57.0.18 이 SDK 핀 `~57.0.20` / `~57.0.19` 과 패치 버전 불일치 — Phase 4.1b 와 무관, 별도 `npx expo install --check` 대상) |
+| `npx expo-doctor` | ⚠️ 20/21 (`expo` 57.0.19 / `expo-router` 57.0.18 이 SDK 핀 `~57.0.20` / `~57.0.19` 과 패치 버전 불일치 — 이번 작업과 무관한 기존 이슈, 의존성 변경 안 함, 별도 `npx expo install --check` 대상) |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 6 + 9 = 109 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, rules 정적 6, firmware 정적 9) |
+| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 23 + 18 + 6 + 9 = 150 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, 서버 판정 코어 + parity 23, 서버 Firestore READ adapter 18, rules 정적 6, firmware 정적 9) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
@@ -929,6 +938,176 @@ Phase 4.1b 까지로 사람 축 / 기기 축 판정과 실기기 파이프라인
 - 신규: `src/utils/deviceHealthText.ts` (`presentSensorRow`),
   `src/utils/todayActivity.ts` (`buildTodayActivitySummary` + `DAILY_LIVING_ACTIVITY_EVENT_TYPES`)
 - 테스트: `scripts/phase41-devicehealth-smoke.mjs` (기기 축 + 홈 표시 14 → 30건)
+
+---
+
+## Phase 4.3 STEP A — 서버 재사용 가능한 상태 판정 코어
+
+Phase 4.3 의 목표는 **보호자 앱이 실행 중이 아니어도 Cloudflare Worker(cron)가
+주기적으로 상태를 계산하고 전환(NORMAL→CHECK, ONLINE→OFFLINE 등)을 감지**하는 것이다.
+STEP A 에서는 그 **순수 판정 코어까지만** 만든다.
+
+> ⛔ STEP A 에 없는 것: cron 등록 · `scheduled()` 프로덕션 로직 · Firestore 상태 문서
+> write · 새 public endpoint · Worker deploy · FCM · Firebase Auth · Firestore rules 변경.
+> 기존 `/ingest-device-event` · `/device-heartbeat` 는 **한 줄도 안 건드렸다** (`git diff` 로
+> `server/cloudflare-worker/` 변경 0 확인, `wrangler deploy --dry-run` 번들 정상).
+
+### 구조 선택
+
+판정 규칙은 이미 순수 함수로 존재한다 — `deriveCareStatus` (`src/services/careStatus.ts`),
+`deriveDeviceHealth` (`src/services/deviceHealth.ts`). 둘 다 firebase/react/zustand import
+없이 `now` 주입 가능. **새로 설계하지 않고 이 둘을 조합**하는 얇은 코어를 추가했다:
+
+```
+src/services/careStatusSnapshot.ts   ← 공유 순수 코어 (client / Worker 공용)
+  computeCareStatusSnapshot(input, now?) → { person, device, computedAt }
+```
+
+- `careStore.project()` 가 두 축을 계산하는 것과 **똑같은 인자**로 `deriveCareStatus` /
+  `deriveDeviceHealth` 를 호출한다. (project() 의 오버라이드 / `presentHome` / 이벤트 스캔은
+  클라이언트 UI 전용이라 코어에 넣지 않는다. 이벤트 스캔 결과 = `lastActivityAt` /
+  `lastSosAt` / `hasAnyEvents` 는 어댑터가 넣는다.)
+- **STEP A 에서 `careStore` 는 건드리지 않았다.** 코어는 "공유 가능한" 상태로 준비만 하고,
+  클라이언트를 코어로 라우팅할지는 STEP B 에서 결정한다 (리스크 최소화).
+- Cloudflare Worker(`.js`, esbuild)와 Node 스모크 러너가 모두 `.ts` 를 확장자 명시로
+  import 할 수 있도록 `tsconfig.json` 에 `allowImportingTsExtensions: true` 만 추가
+  (`moduleResolution: bundler` + `noEmit` 와 호환, Metro 번들 정상 확인). 무리한 monorepo
+  리팩터링은 하지 않았다.
+
+### 입력 / 출력
+
+```ts
+computeCareStatusSnapshot({
+  // 어댑터가 Firestore 에서 읽어 정규화한 값
+  lastActivityAt?, lastSosAt?, hasAnyEvents, emergencyAckedAt?,
+  deviceDocExists, deviceLastEventAt?, lastHeartbeatAt?,
+  // ⚠️ threshold 는 반드시 명시 주입 — 서버는 EXPO_PUBLIC_* / careStatusConfig 를 참조하지 않는다
+  thresholds: { inactivityMinutes, deviceOfflineMinutes, emergencyLookbackHours, emergencyTtlHours },
+}, now?) → {
+  person: CareStatusResult,   // deriveCareStatus 결과 그대로 (status/reason/systemHealth/minutesSinceActivity/…)
+  device: DeviceHealthResult, // deriveDeviceHealth 결과 그대로 (health/reason/lastSeenAt/minutesSinceSeen/…)
+  computedAt: string,
+}
+```
+
+- **새 상태 enum 없음.** 기존 `CareStatusResult` / `DeviceHealthResult` 를 그대로 담는다.
+- 앱 개발용 `EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES=2` override 는 클라이언트 전용이며 서버 코어와
+  무관하다. STEP A 에서 이 값 / `.env` 는 건드리지 않았다. 코드 기본값은 inactivity 180분 /
+  device offline 25분 / heartbeat PoC 10분. 운영 threshold 확정은 STEP B.
+- `now` 주입 필수 구조. `Date.now()` 를 함수 내부에서 직접 부르지 않는다. 저장 timestamp 는
+  UTC instant, 경과는 instant 차이. "오늘 날짜" 같은 local-day 계산은 서버 판정에 넣지 않는다
+  (그건 Home UX "오늘 활동" 전용). 미래 timestamp 등 비정상 입력은 `deriveCareStatus` /
+  `deriveDeviceHealth` 의 기존 동작을 그대로 따른다 — 새 안전정책 없음.
+
+### 검증
+
+`scripts/phase43-server-carestatus-smoke.mjs` (23건, `npm run test:smoke` 포함):
+
+- **결정적 시나리오 12** — recent+fresh, inactivity+fresh, inactivity+stale(두 축 독립),
+  NORMAL+OFFLINE(사람 축 변조 없음 + Home green NORMAL 금지), EMERGENCY±OFFLINE(최우선),
+  no_data, no heartbeat/no doc, threshold 직전/도달/직후, 미래 timestamp.
+- **Client↔Server parity 11** — 같은 fixture 를 `careStore.project()` 의 두 derive 호출을
+  그대로 미러한 경로(`appPath`) 와 `computeCareStatusSnapshot`(`serverPath`) 에 넣어
+  `person` / `device` / `presentHome` 결과가 `deepEqual` 인지 확인. 코어가 검증된 domain
+  함수를 **실제로 호출**하므로 "서버용 재구현" 이 아니다. (`appPath` 에 project() 가 바뀌면
+  같이 고치라는 주석 표시.)
+- `scripts/phase43-server-carestatus-dryrun.mjs` — Worker 가 Firestore 조회 결과를
+  정규화해 코어를 호출하는 모양의 순수 dry-run (write/cron/deploy 없음).
+
+---
+
+## Phase 4.3 STEP B-1 — Firestore READ → normalize → compute
+
+> ⛔ 여전히 없는 것: Firestore **status write** · cron · `scheduled()` 프로덕션 핸들러 ·
+> 새 public endpoint · Worker deploy · FCM · Auth · rules 변경 · `careStore.project()` 변경.
+> 이번 단계는 **완전히 READ ONLY** 다.
+
+STEP A 의 순수 코어(`computeCareStatusSnapshot`)에 실제 데이터를 먹이는 어댑터를 만들었다.
+
+```
+Firestore
+  │  readCareStatusSource()          server/cloudflare-worker/src/firestoreRead.js   (READ ONLY)
+  ▼
+{ events, device }
+  │  normalizeCareStatusInput()      src/services/careStatusSnapshotInput.ts   (공유, 순수)
+  ▼
+CareStatusSnapshotInput
+  │  computeCareStatusSnapshot()     src/services/careStatusSnapshot.ts   (STEP A 공유 코어)
+  ▼
+CareStatusSnapshot { person, device, computedAt }
+```
+
+한 곳에서 전체 흐름: `computeCareStatusFromFirestore(env, { careRecipientId, deviceId, thresholds, now })`
+(`server/cloudflare-worker/src/careStatusReader.js`). STEP B-2 의 `scheduled()` 가 이 함수를
+한 줄로 호출하게 된다. **이 함수는 WRITE 를 하지 않는다.**
+
+### Firestore READ 구조
+
+| 대상 | 방식 | 인덱스 |
+| --- | --- | --- |
+| `events` | `POST …/documents:runQuery` — `where careRecipientId == X` + `orderBy occurredAt DESC` + `limit 100` | **기존 인덱스 재사용** (`firestore.indexes.json`: careRecipientId ASC + occurredAt DESC). 새 인덱스 없음 |
+| `devices/{deviceId}` | `GET …/documents/devices/{id}` (point read), 404 → 문서 없음 | 불필요 |
+
+- 판정당 **read 2회** (events 쿼리 1 + devices point read 1, `Promise.all`).
+- `events` 는 `eventType` 별 필터를 **하지 않는다** (그러려면 새 복합 인덱스 필요 —
+  `careRecipientId + eventType + occurredAt`). 대신 최근 100건을 받아
+  `normalizeCareStatusInput` 이 JS 에서 `ACTIVITY_EVENT_TYPES` 로 스캔한다.
+  → **트레이드오프**: 대상자의 마지막 활동이 최근 100건보다 오래됐으면 `lastActivityAt` 을
+  놓칠 수 있다(그 경우 사실상 inactivity 상태). 정밀하게 하려면 STEP B-2 에서
+  전용 인덱스를 추가한다. 전체 컬렉션 스캔은 하지 않으며 항상 `careRecipientId` 로 제한.
+- 아직 **인증 없이** 읽는다 (`firestore.rules` 가 events/devices read 를 `if true` 로 열어둠 —
+  DEVELOPMENT ONLY). Phase 4.4 에서 규칙을 좁히면 service-account access token 필요.
+
+### normalize 규칙 — 클라이언트와 동일
+
+- `lastActivityAt` = `eventViews.ts` 의 **`ACTIVITY_EVENT_TYPES` 를 그대로 공유 import** 해서
+  스캔한 가장 최근 activity 이벤트 시각. (motion/door/left/returned/**watch_activity**/**medication_taken**.
+  Home UX 의 `DAILY_LIVING_ACTIVITY_EVENT_TYPES` 와 **다르다** — 그건 홈 "오늘 활동" 표시 전용.)
+  복붙 아님. `scripts/phase43-firestore-reader-smoke.mjs` 의 parity 테스트가 고정.
+- `lastSosAt` = 가장 최근 `sos_triggered` 시각 (activity 로 세지 않는다).
+- `hasAnyEvents` = 조회된 이벤트가 1건 이상.
+- `deviceDocExists` (문서 null 여부) 와 `lastHeartbeatAt` (필드 유무) 를 **분리**한다 —
+  `deriveDeviceHealth` 의 `no_device_doc` vs `no_heartbeat_capability` 구분이 보존된다.
+- **timestamp**: `toInstantIso()` 가 유효한 문자열이면 ISO instant, 아니면 `undefined`.
+  **잘못된 timestamp 를 now 로 대체하지 않는다** (신호를 조작하지 않기 위해).
+  경과 계산은 UTC instant 차이. local-day 계산 없음.
+- **`emergencyAckedAt` = 항상 `undefined`** — 현재 데이터 모델에 서버가 읽을 수 있는 ack
+  저장소가 없다 (앱 `acknowledgeEmergency()` 는 클라이언트 전용 dev 플래그). 서버 EMERGENCY 는
+  TTL 로만 만료된다. 지속 ack 설계는 STEP B-2 이후.
+
+### 검증
+
+`scripts/phase43-firestore-reader-smoke.mjs` (**18건**, `npm run test:smoke` 포함) — Firestore REST 를
+`fetch` mock 으로 흉내: activity+fresh / 오래된 activity / heartbeat stale / SOS±stale / no events /
+no device doc / device doc + no heartbeat / 최근 event 가 비활동인데 이전 activity 존재 /
+다중 activity·SOS 최신 선택 / `careRecipientId` 쿼리 제한 / timestamp 파싱 / threshold boundary /
+ACTIVITY parity / **모든 시나리오에서 Firestore WRITE 0회 assert**.
+
+**실제 dev Firestore READ 검증 완료** (READ ONLY, 인증/토큰 없음): `byeolileopji` 프로젝트에서
+`dev-care-recipient` / `dev-device-livingroom` 를 실제 조회 → normalize → 코어 compute.
+결과 (전날 활동만 있고 ESP32 는 분리된 상태): `person = CHECK / inactivity`,
+`device = offline / heartbeat_stale` — 사용자가 실기기 홈에서 본 상태와 일치. WRITE 없음 확인.
+
+### `tsconfig.json allowImportingTsExtensions`
+
+STEP A 에서 추가했고 **유지한다.** 이제 load-bearing:
+`careStatusSnapshot.ts` → `./careStatus.ts` / `./deviceHealth.ts`, `careStatusSnapshotInput.ts` →
+`./careStatusSnapshot.ts` / `./eventViews.ts`, Worker `careStatusReader.js` → 두 공유 `.ts`,
+스모크 2개가 모두 `.ts` 확장자 명시 import 를 쓴다. 이 설정이 있어야 **같은 파일**을
+tsc(`--noEmit`) · Metro · esbuild(Worker) · Node 스모크 러너가 모두 소비한다.
+제거하려면 확장자를 떼야 하는데 그러면 Node 스모크 러너가 `.ts` 를 해석하지 못한다.
+검증: typecheck ✅ · `expo export` (Metro) ✅ · `esbuild --bundle careStatusReader.js` ✅
+(공유 심볼 번들됨, `careStatusConfig.ts` 의 `process.env` 는 type-only import 라 erase 됨).
+
+### STEP B-2 에서 할 일
+
+- **스냅샷 스키마 설계** + Firestore write (`careRecipients/{id}` 하위 `careStatus` 문서 등).
+  `firestore.rules` 를 Worker write 허용 범위로 갱신.
+- **운영 threshold 확정** — Worker `[vars]` 또는 상수. 앱 개발 override 와 분리 유지.
+- (선택) `events` `eventType` 필터용 복합 인덱스 추가 여부 결정.
+- **지속 ack 저장소** 설계 (서버 EMERGENCY 를 보호자가 확인 처리할 수 있게).
+- 이전 스냅샷 비교 → 전환 감지 (STEP B-3) → FCM (Phase 4.4).
+- `wrangler.toml` `[triggers] crons` + `scheduled()` (STEP B-4).
 
 ---
 

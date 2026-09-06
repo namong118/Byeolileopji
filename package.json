@@ -31,7 +31,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "test:smoke": "node scripts/phase25-smoke.mjs && node scripts/phase3-endpoint-smoke.mjs && node scripts/phase4-status-smoke.mjs && node scripts/phase41-devicehealth-smoke.mjs && node scripts/rules-check.mjs && node scripts/firmware-check.mjs"
+    "test:smoke": "node scripts/phase25-smoke.mjs && node scripts/phase3-endpoint-smoke.mjs && node scripts/phase4-status-smoke.mjs && node scripts/phase41-devicehealth-smoke.mjs && node scripts/phase43-server-carestatus-smoke.mjs && node scripts/phase43-firestore-reader-smoke.mjs && node scripts/rules-check.mjs && node scripts/firmware-check.mjs"
   },
   "private": true
 }
