@@ -67,6 +67,17 @@ check('careRecipients / events update·delete 는 여전히 잠겨 있다', () =
   assert.ok(/match \/events\/\{eventId\}\s*{[\s\S]*?allow update, delete: if false/.test(src));
 });
 
+check('careStatus 는 파생 데이터 전용 컬렉션 (Phase 4.3 B-2, delete 잠금)', () => {
+  const m = src.match(/match \/careStatus\/\{careRecipientId\}\s*{([\s\S]*?)\n {4}}/);
+  assert.ok(m, 'careStatus 블록을 찾을 수 없음');
+  const block = m[1];
+  assert.ok(/allow read: if true/.test(block), 'careStatus read 허용 없음');
+  assert.ok(/allow create, update: if true/.test(block), 'Worker 계산 결과 write 허용 없음');
+  assert.ok(/allow delete: if false/.test(block), 'careStatus delete 는 잠겨 있어야 함');
+  // careStatus 는 필드 화이트리스트(hasOnly)를 쓰지 않는다 — 서버가 전체 문서를 replace 한다.
+  assert.ok(!/hasOnly/.test(block), 'careStatus 블록에 예상치 못한 hasOnly');
+});
+
 check('DEVELOPMENT ONLY 표기가 있다', () => {
   assert.ok(/DEVELOPMENT ONLY/.test(raw));
 });

@@ -74,7 +74,9 @@ Phase 4.3  🚧  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
               ├─ ✅  STEP B-1 — Firestore READ → normalize → 공유 코어 compute
               │       (Worker `firestoreRead.js` + `careStatusReader.js`, events `:runQuery`
               │        + devices point read, **READ ONLY**, 실제 dev Firestore READ 검증 완료)
-              ├─ ⏳  STEP B-2 — careStatus 스냅샷 스키마 + Firestore write + 운영 threshold
+              ├─ ✅  STEP B-2 — careStatus 스냅샷 스키마 + Firestore write (serialize 순수 분리,
+              │       `careStatus/{careRecipientId}` deterministic overwrite, 실패 = throw,
+              │       스모크 13건. 운영 threshold 확정 · 실제 write 검증은 rules 게시 후)
               ├─ ⏳  STEP B-3 — 이전 스냅샷 비교 → 상태 전환 감지
               └─ ⏳  STEP B-4 — `wrangler.toml` cron + `scheduled()` deploy
 Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
@@ -401,7 +403,7 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run lint` | ✅ 통과 |
 | `npx expo-doctor` | ⚠️ 20/21 (`expo` 57.0.19 / `expo-router` 57.0.18 이 SDK 핀 `~57.0.20` / `~57.0.19` 과 패치 버전 불일치 — 이번 작업과 무관한 기존 이슈, 의존성 변경 안 함, 별도 `npx expo install --check` 대상) |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 23 + 18 + 6 + 12 = 153 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, 서버 판정 코어 + parity 23, 서버 Firestore READ adapter 18, rules 정적 6, firmware 정적 12) |
+| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 23 + 18 + 13 + 7 + 12 = 167 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, 서버 판정 코어 + parity 23, 서버 Firestore READ adapter 18, 서버 careStatus snapshot serialize+write 13, rules 정적 7, firmware 정적 12) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
@@ -1103,15 +1105,131 @@ tsc(`--noEmit`) · Metro · esbuild(Worker) · Node 스모크 러너가 모두 �
 검증: typecheck ✅ · `expo export` (Metro) ✅ · `esbuild --bundle careStatusReader.js` ✅
 (공유 심볼 번들됨, `careStatusConfig.ts` 의 `process.env` 는 type-only import 라 erase 됨).
 
-### STEP B-2 에서 할 일
+---
 
-- **스냅샷 스키마 설계** + Firestore write (`careRecipients/{id}` 하위 `careStatus` 문서 등).
-  `firestore.rules` 를 Worker write 허용 범위로 갱신.
-- **운영 threshold 확정** — Worker `[vars]` 또는 상수. 앱 개발 override 와 분리 유지.
+## Phase 4.3 STEP B-2 — careStatus 스냅샷 스키마 + Firestore WRITE
+
+> ⛔ 여전히 없는 것: cron · `scheduled()` 프로덕션 핸들러 · 이전 스냅샷 비교(전환 감지, STEP B-3) ·
+> FCM · Firebase Auth · rules 대규모 재설계 · Worker deploy · `careStore.project()` 변경 ·
+> 운영 threshold 확정. 이번 단계는 **compute 결과를 저장 가능한 문서로 직렬화 + Firestore write** 까지다.
+
+STEP B-1 의 `computeCareStatusFromFirestore()` 결과(`CareStatusSnapshot`)를 Firestore 에 쓴다.
+
+```
+CareStatusSnapshot { person, device, computedAt }
+  │  serializeCareStatusSnapshot()   src/services/careStatusSnapshotDoc.ts   (공유, 순수)
+  ▼
+CareStatusSnapshotDoc   (평문 · 모든 키 emit · timestamp = Date · 없으면 null)
+  │  toFirestoreFields()             server/cloudflare-worker/src/firestore.js
+  ▼
+PATCH …/careStatus/{careRecipientId}?updateMask=<모든 필드>   server/cloudflare-worker/src/careStatusWriter.js
+```
+
+한 줄 흐름: `computeAndWriteCareStatusSnapshot(env, { careRecipientId, deviceId, thresholds, now })`
+(`careStatusWriter.js`). STEP B-4 의 `scheduled()` 가 이걸 호출한다. STEP B-3 은 write 앞에
+"이전 스냅샷 read + 비교" 를 끼워넣는다.
+
+### 저장 위치 — `careStatus/{careRecipientId}` (top-level)
+
+| | |
+| --- | --- |
+| 컬렉션 | `careStatus` — `devices` / `events` 와 같은 레벨. **raw(events/devices) ↔ derived(careStatus) 를 컬렉션으로 분리** |
+| 문서 id | `careRecipientId` (고정) → 대상자당 문서 **1개**. event history 처럼 새 문서를 쌓지 않는다 |
+| 쓰기 | `PATCH` + `updateMask` 에 **모든 필드** → 이전 값이 무엇이든 전체 replace. 같은 스냅샷 두 번 write → 동일 문서 (**idempotent**) |
+| STEP B-3 | 이전 스냅샷 = `GET careStatus/{id}` point read 1회. flat 필드라 `status`/`reason`/`deviceHealth` 비교가 `===` 몇 개 |
+
+> README STEP B-1 의 계획 노트는 `careRecipients/{id}` 하위 서브컬렉션을 예로 들었지만("등"),
+> 앱의 기존 `devices/{id}` 레지스트리 패턴과 일치시키고 `firestore.rules` 블록도 1개면 되도록
+> **top-level `careStatus/{id}`** 를 골랐다.
+
+### 스냅샷 스키마 (`CareStatusSnapshotDoc`)
+
+```
+careRecipientId, schemaVersion(=1),
+// 사람 축 (deriveCareStatus 결과)
+status, reason, systemHealth,
+lastActivityAt|null, minutesSinceActivity|null, emergencyEventAt|null,
+// 기기 축 (deriveDeviceHealth 결과)
+deviceHealth, deviceHealthReason,
+deviceLastEventAt|null, deviceLastHeartbeatAt|null, deviceLastSeenAt|null, deviceMinutesSinceSeen|null,
+// 메타
+computedAt
+```
+
+- **새 상태 enum 없음.** `CareStatusResult` / `DeviceHealthResult` 필드를 `device*` 접두사로 평탄화만 한다.
+- 스키마의 **모든 키를 항상 emit** — 값 없으면 `null` (not `undefined`/`NaN`). `null` = "이번 판정엔 해당 없음"
+  (예: NORMAL 스냅샷의 `emergencyEventAt`). deterministic overwrite 를 위해.
+- **timestamp**: ISO 문자열 → `Date` → `firestore.js` 가 `timestampValue` 로 변환
+  (`events.occurredAt` / `devices.lastHeartbeatAt` 와 동일). 잘못된/없는 시각은 `null` —
+  **now 로 대체하지 않는다** (STEP B-1 신호 비조작 원칙 유지). `computedAt` 은 `snapshot` 에서 온다
+  (write 시각 같은 비결정적 값을 serialize 가 만들지 않는다).
+- `serialize` 는 **순수/결정적** — `careRecipientId` 누락 / `computedAt` 불량이면 throw (write 시도 전).
+
+### threshold — STEP B-1 그대로, 이번 단계에서 재설계 안 함
+
+- threshold 는 여전히 **호출자가 명시 주입** (`computeCareStatusFromFirestore` / `computeAndWrite…` 의
+  `thresholds` 인자). 서버 코어는 `EXPO_PUBLIC_*` / `careStatusConfig` 를 참조하지 않는다.
+- **운영값을 이번에 확정하지 않았다.** 앱 코드 기본값(inactivity 180분 / device offline 25분 /
+  emergency 12h)이 placeholder 임은 그대로다. Worker `[vars]` 운영 threshold 는 실행 진입점
+  (`scheduled()`)이 생기는 **STEP B-4 로 미룬다** — B-2 는 테스트/ dry-run 에서만 호출되고 전부 명시 주입.
+- 앱 개발용 `EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES=2` override 는 이 경로와 무관하다 (`.env` 무변경).
+
+### Firestore 실패 처리
+
+- `writeCareStatusSnapshot` 은 HTTP 실패를 **삼키지 않는다** — `FirestoreError`(status 포함)를 throw 해
+  호출자에게 전달한다. best-effort 아님 (`/device-heartbeat` write 와 같은 정책. `lastEventAt`
+  best-effort PATCH 와 다르다). 스모크에서 403/500/503 → caller 가 throw 를 받는지 assert.
+- 로그/에러 detail 에 secret(토큰·API key·device key) 없음 — Firestore 오류 본문 앞 500자만.
+
+### `firestore.rules` 변경
+
+새 `match /careStatus/{careRecipientId}` 블록 1개 추가:
+
+```
+allow read: if true;            // DEVELOPMENT ONLY
+allow create, update: if true;  // DEVELOPMENT ONLY — 서버(Worker) 계산 결과 write
+allow delete: if false;
+```
+
+- **새 컬렉션**이다 — 기존 client write 권한(`events` create / `devices` update)을 넓히지 않았다.
+- Worker 가 B-1 처럼 **무인증 REST** 로 write 하므로 (default deny 상태면 write 불가) 최소 블록이 필요하다.
+- Phase 4.4 에서 `read: if isLinkedGuardian(...)` / `write: if false` 로 좁힌다 (블록에 주석).
+- 이 환경엔 Java / firebase-tools 가 없어 rules 를 **게시할 수 없다** → **실제 dev Firestore write 검증은
+  사용자가 rules 게시 후** (B-1 은 기존 open rules 라 실제 READ 검증이 됐지만, 새 컬렉션 write 는 게시 필요).
+  스모크는 `fetch` mock 으로 REST PATCH shape 를 전부 커버.
+- `scripts/rules-check.mjs` 에 careStatus 블록 정적 검사 1건 추가 (6 → 7).
+
+### 검증
+
+`scripts/phase43-carestatus-writer-smoke.mjs` (**13건**, `npm run test:smoke` 포함) — `fetch` mock:
+
+1. NORMAL compute → 직렬화 정확 (status/reason/systemHealth, timestamp = Date, computedAt)
+2. CHECK → status/reason + minutesSinceActivity 유지
+3. EMERGENCY → 최우선 + `emergencyEventAt` 보존 (기기 offline 이어도 기기 축 독립 기록)
+4. timestamp 필드 → `toFirestoreFields` 가 `timestampValue`, 없는 시각 `nullValue`, round-trip
+5. undefined optional → `null` (JSON 에 `undefined`/`NaN` 없음, 모든 field 존재)
+6. `careRecipientId` → 문서 필드 + 경로(`careStatus/{id}`) 둘 다
+7. 같은 recipient 재계산 → 동일 경로 + 동일 직렬화 (다른 대상자는 다른 문서)
+8. 두 번 write → 같은 문서 `PATCH` + `updateMask` (auto-id `POST` 로 새 문서 안 쌓음)
+9. write 성공 → `{ path, doc }`, throw 없음, careStatus 외 write 0
+10. write 실패 403/500/503 → `FirestoreError` 가 호출자에게 throw / 10b. serialize 실패 → fetch 안 함
+11. `computeAndWriteCareStatusSnapshot` — B-1 `computeCareStatusFromFirestore` 와 동일 snapshot/input
+    (회귀 없음) + careStatus write 정확히 1회 + 저장 문서가 snapshot 과 일치
+12. parity — 직렬화된 `status`/`reason`/`systemHealth`/`deviceHealth`/`deviceHealthReason` 가
+    `deriveCareStatus` / `deriveDeviceHealth`(앱 경로) 결과와 일치
+
+`esbuild --bundle careStatusWriter.js` ✅ · `wrangler deploy --dry-run` ✅ (`index.js` 는 아직
+writer 를 import 하지 않음 — B-4 `scheduled()` 에서 연결).
+
+### STEP B-3 / B-4 / Phase 4.4 에서 할 일
+
+- **STEP B-3**: write 전에 `GET careStatus/{id}` (이전 스냅샷) → `status`/`reason`/`deviceHealth` 비교
+  → 전환(`NORMAL→CHECK` 등) 감지. 전환 시각 필드 추가 검토.
+- **STEP B-4**: `wrangler.toml` `[triggers] crons` + `scheduled()` → `computeAndWriteCareStatusSnapshot`.
+  **운영 threshold 확정** (Worker `[vars]`, 앱 개발 override 와 분리 유지). Worker deploy + rules 게시.
 - (선택) `events` `eventType` 필터용 복합 인덱스 추가 여부 결정.
-- **지속 ack 저장소** 설계 (서버 EMERGENCY 를 보호자가 확인 처리할 수 있게).
-- 이전 스냅샷 비교 → 전환 감지 (STEP B-3) → FCM (Phase 4.4).
-- `wrangler.toml` `[triggers] crons` + `scheduled()` (STEP B-4).
+- **지속 ack 저장소** 설계 (서버 EMERGENCY 를 보호자가 확인 처리 — 현재 서버 EMERGENCY 는 TTL 로만 만료).
+- **Phase 4.4**: 전환 → FCM 푸시. Firebase Auth + `firestore.rules` 좁히기 (careStatus write = 서버만).
 
 ---
 
