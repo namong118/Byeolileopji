@@ -36,12 +36,14 @@ Smart Watch
 Phase 1    ✅  Guardian App + Mock Event Pipeline
 Phase 2    ⏭️  Supabase Backend (구현했으나 hosted 검증 전 Firebase 로 전환)
 Phase 2.5  ✅  Firebase Firestore Persistence + Realtime (hosted 검증 완료)
-Phase 3    🚧  ESP32-S3 + PIR 센서 실연동
+Phase 3    ✅  ESP32-S3 + PIR 센서 실연동 (하드웨어 E2E 완료)
               ├─ ✅  서버 ingest endpoint (Cloudflare Worker) — 배포 + curl → Firestore
               │       → 앱 onSnapshot 실시간 반영까지 hosted 검증 완료
               ├─ ✅  ESP32-S3 실기기 네트워크 E2E 검증 완료
               │       (실기기 업로드 → Wi-Fi → HTTPS → Worker → 인증 → Firestore → 앱 실시간)
-              └─ ⏳  HC-SR501 PIR → GPIO4 → ESP32 실물 센서 E2E 검증  ← pending (센서 미도착)
+              └─ ✅  HC-SR501 PIR → GPIO4 → ESP32 실물 센서 E2E 검증 완료
+                      (사람 움직임 → 상승 에지 → handlePir() → HTTP 201 → 앱 반영. TEMP TEST/DEBUG 제거)
+                      ⚠️ 장기 안정성 / 낙상 감지 / 추가 센서는 검증 범위 아님
 Phase 4.0  ✅  클라이언트 상태 자동 판정 (NORMAL / CHECK / EMERGENCY)
               ├─ ✅  recent activity → NORMAL / inactivity 경과 → CHECK / sos → EMERGENCY
               ├─ ✅  ESP32 motion_detected → CHECK → NORMAL 자동 복귀 (실기기 수동 검증)
@@ -58,8 +60,8 @@ Phase 4.1b ✅  ESP32 heartbeat + /device-heartbeat → unknown → online/offli
               ├─ ✅  Cloudflare Worker 배포 + Firebase Console rules 게시 + ESP32-S3 실기기 업로드 완료
               ├─ ✅  ESP32 heartbeat HTTP 200 → devices.lastHeartbeatAt 실제 갱신 → 앱 online/heartbeat_fresh
               ├─ ✅  ESP32 전원 차단 → offline/heartbeat_stale ("센서 연결을 확인하고 있어요") → 재연결 → online 자동 복귀
-              ├─ ✅  사람 축(NORMAL/CHECK) ↔ 기기 축(online/offline) 실기기에서 독립 동작 확인
-              └─ ⏳  HC-SR501 PIR 실물 센서 E2E 는 여전히 pending (PIR 미연결 floating motion 은 검증 결과에서 제외)
+              └─ ✅  사람 축(NORMAL/CHECK) ↔ 기기 축(online/offline) 실기기에서 독립 동작 확인
+                      (PIR 실물 센서 E2E 는 Phase 3 에서 별도 완료)
 Home UX A–D ✅  보호자 홈 화면 정보구조 압축 (판정 로직·개발자 탭 무변경, 실기기 UX 검증 완료)
               ├─ ✅  홈 = Hero + 통합 정보 카드(마지막 활동 / 센서 연결 / 오늘 활동) + 오늘의 기록
               ├─ ✅  복약·워치·평상시 SOS·외출/귀가·중복 offline 경고·별도 offline 문장 홈에서 제거
@@ -87,15 +89,16 @@ Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 > **Phase 3 현황:** ESP32 가 Firestore 에 직접 쓰지 않고
 > `ESP32 → HTTPS → Cloudflare Worker → Firestore` 구조.
 >
-> **✅ ESP32-S3 실기기 네트워크 E2E 검증 완료** (실기기로 확인):
-> ESP32-S3 DevKitC-1 펌웨어 업로드 → 2.4GHz Wi-Fi 연결 → Cloudflare Worker 로 HTTPS POST →
-> `X-Device-Key` 인증 → `POST /ingest-device-event` HTTP 201 → `events` 문서 생성 →
-> Expo 앱 `onSnapshot` 실시간 반영 (앱에 "방금 · 거실" 활동 표시).
-> (센서가 아직 없어 `esp32-pir.ino` 의 `setup()` 에 있는 TEMP TEST 블록이
-> `motion_detected` 를 부팅당 1회 전송하는 방식으로 검증.)
+> **✅ 하드웨어 E2E 검증 완료** (실물 HC-SR501 로 확인):
+> 사람 움직임 → HC-SR501 PIR → `GPIO4` 상승 에지 → `handlePir()` → ESP32-S3 → 2.4GHz Wi-Fi →
+> Cloudflare Worker HTTPS POST → `X-Device-Key` 인증 → `POST /ingest-device-event` HTTP 201 →
+> `events` 문서 생성 → `devices.lastEventAt` 갱신 → Expo 앱 `onSnapshot` 실시간 반영
+> ("활동이 확인됐어요"). 쿨다운(`MOTION_COOLDOWN_MS`) 동작도 확인.
+> 초기 검증에 쓴 부팅 TEMP TEST 블록과 GPIO4 TEMP DEBUG 는 **제거**했다
+> (`scripts/firmware-check.mjs` 가 재유입 차단).
 >
-> **⏳ pending:** `사람 움직임 → HC-SR501 PIR → GPIO4 → ESP32-S3` 구간.
-> PIR 센서/브레드보드 미도착. (상세: `firmware/esp32-pir/README.md`)
+> ⚠️ 단일 세션 E2E 까지 확인. 장기 안정성 / 낙상 감지 / 추가 센서는 아직 범위 아님.
+> (상세: `firmware/esp32-pir/README.md`)
 
 ---
 
@@ -398,11 +401,11 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run lint` | ✅ 통과 |
 | `npx expo-doctor` | ⚠️ 20/21 (`expo` 57.0.19 / `expo-router` 57.0.18 이 SDK 핀 `~57.0.20` / `~57.0.19` 과 패치 버전 불일치 — 이번 작업과 무관한 기존 이슈, 의존성 변경 안 함, 별도 `npx expo install --check` 대상) |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 23 + 18 + 6 + 9 = 150 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, 서버 판정 코어 + parity 23, 서버 Firestore READ adapter 18, rules 정적 6, firmware 정적 9) |
+| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 23 + 18 + 6 + 12 = 153 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, 서버 판정 코어 + parity 23, 서버 Firestore READ adapter 18, rules 정적 6, firmware 정적 12) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
-| Phase 3 실물 PIR (사람 움직임 → HC-SR501 → GPIO4 → ESP32) | ⏳ 센서 도착 후 (`firmware/esp32-pir/README.md`) |
+| Phase 3 **실물 PIR** (사람 움직임 → HC-SR501 → GPIO4 상승 에지 → `handlePir()` → HTTP 201 → 앱 반영, 쿨다운 포함) | ✅ **실물 센서 E2E 검증 완료** · TEMP TEST/DEBUG 제거 · ⚠️ 장기 안정성·낙상 감지·추가 센서는 범위 아님 (`firmware/esp32-pir/README.md`) |
 | **Phase 4.0** recent activity → NORMAL / inactivity 경과 → CHECK / ESP32 motion → CHECK→NORMAL 자동 복귀 | ✅ **실기기 수동 검증 완료** (개발용 2분 threshold) |
 | **Phase 4.0** EMERGENCY / SOS 판정 · override · TTL · ack | ✅ 자동 스모크 15건 · ⚠️ 실기기 수동 검증은 미실시 |
 | **Phase 4.1a** 사람 축 / 기기 축 독립 · deriveDeviceHealth · presentHome 안전 규칙 | ✅ 자동 스모크 12건 |
@@ -415,10 +418,10 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | **Phase 4.1b** 기존 `/ingest-device-event` · `/health` 회귀 | ✅ 자동 스모크로 재확인 (동일 응답) |
 | **Phase 4.1b** `deriveDeviceHealth` heartbeat fresh→online / stale→offline / CHECK+online→CHECK UI | ✅ 자동 스모크 2건 (synthetic) · ✅ **실기기에서 online→offline→online 왕복 확인** |
 | **Phase 4.1b** `firestore.rules` devices update = `hasOnly(['lastEventAt','lastHeartbeatAt'])` | ✅ 코드 반영 + 정적 검사 6건 · ✅ **Firebase Console 게시 완료** |
-| **Phase 4.1b** 펌웨어 heartbeat (`sendHeartbeat`/`handleHeartbeat`, TEMP TEST·motion 경로 유지) | ✅ 정적 검사 9건 + xtensa-esp-elf-g++ 구문 검사 · ✅ **ESP32-S3 실기기 업로드 + `[HB] 200` 확인** |
+| **Phase 4.1b** 펌웨어 heartbeat (`sendHeartbeat`/`handleHeartbeat`, motion 경로 유지) | ✅ 정적 검사 12건 + xtensa-esp-elf-g++ 구문 검사 · ✅ **ESP32-S3 실기기 업로드 + `[HB] 200` 확인** |
 | **Phase 4.1b** 실기기 heartbeat E2E (heartbeat 로 online 유지 → 전원 차단 시 offline → 재연결 시 online) | ✅ **사용자 실기기 검증 완료** (테스트값: heartbeat 30초 / offline 임계 2분 / recompute 15초 — 전부 원복) |
 | **Phase 4.1b** 사람 축 CHECK 와 기기 축 offline 이 홈에서 혼동되지 않음 (CHECK ≠ 센서 offline) | ✅ **실기기 검증 완료** (전원 차단 시 "센서 연결을 확인하고 있어요" 로 정확히 전환) |
-| **Phase 4.1b** HC-SR501 PIR 실물 센서 → GPIO4 → heartbeat 와 병행 E2E | ⏳ **pending** (PIR 미연결. 이번에 관측된 floating `motion_detected` 는 검증 결과에서 제외) |
+| **Phase 4.1b** HC-SR501 PIR 실물 센서 → GPIO4 → heartbeat 와 병행 E2E | ✅ **실물 센서 E2E 검증 완료** (Phase 3 항목 참고. PIR motion + heartbeat 가 같은 펌웨어에서 병행 동작) |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
 순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증·상태 판정·기기 판정)를 검증하고,
@@ -571,8 +574,8 @@ per-device key + 서명 검증, rate limiting, CA 핀 고정.
 | **ESP32-S3 → 2.4GHz Wi-Fi 연결** | ✅ **실기기 검증 완료** |
 | **ESP32-S3 → Worker HTTPS POST + `X-Device-Key` 인증 → HTTP 201** | ✅ **실기기 검증 완료** |
 | **ESP32-S3 발 이벤트 → Firestore → Expo 앱 실시간 반영** ("방금 · 거실") | ✅ **실기기 검증 완료** |
-| 실물 HC-SR501 PIR HIGH 감지 (GPIO4) | ⏳ 센서 대기 |
-| 사람 움직임 → HC-SR501 → ESP32 → 앱 "거실에서 활동이 확인됐어요" end-to-end | ⏳ 센서 대기 |
+| 실물 HC-SR501 PIR HIGH 감지 (GPIO4 상승 에지) | ✅ **실기기 검증 완료** (`[PIR DEBUG] transition LOW -> HIGH` 로 배선 확인 후 제거) |
+| 사람 움직임 → HC-SR501 → GPIO4 → `handlePir()` → HTTP 201 → 앱 "활동이 확인됐어요" end-to-end | ✅ **실기기 검증 완료** (쿨다운 동작 포함) |
 
 ---
 
@@ -640,11 +643,11 @@ Firestore 스키마 변경 없음, 새 컬렉션 없음, Worker/firmware/rules �
 ```
 최근 motion_detected 있음                  → NORMAL 정상 표시
 약 2분간 활동 없음                          → 자동으로 CHECK 전환 (확인 필요 UI)
-CHECK 상태에서 ESP32-S3 USB 재연결 재부팅
-ESP32 TEMP TEST 가 motion_detected 1회 전송
+CHECK 상태에서 HC-SR501 앞에서 실제 움직임   → handlePir() 상승 에지 → motion_detected
 ESP32 → Wi-Fi → Worker → Firestore → onSnapshot
 앱 조작/새로고침 없이 CHECK → NORMAL 자동 복귀 → 활동 확인 UI 정상 표시
 ```
+(초기에는 부팅 TEMP TEST 이벤트로 확인했고, PIR 실물 연결 후 실제 움직임으로 재확인.)
 
 - 개발용 2분 threshold 는 **테스트 설정일 뿐 실제 안전 기준이 아니다.**
 - EMERGENCY / SOS 경로는 **자동 스모크 15건만** 완료. 실기기 수동 검증은 아직 안 했다.
@@ -762,7 +765,8 @@ FCM 푸시 · Firebase Auth · Firestore rules 강화 · events enum 변경 → 
 
 **[Worker hosted — lastEventAt]**
 - Phase 4.1a Worker 변경을 Cloudflare 에 실제 배포.
-- ESP32-S3 USB 재연결 → 기존 TEMP TEST 의 `motion_detected` 1회 전송 →
+- (당시 검증) ESP32-S3 재부팅 → 부팅 TEMP TEST 의 `motion_detected` 1회 전송 →
+  (Phase 3 에서 PIR 실물 움직임으로 동일 경로 재확인, TEMP TEST 는 이후 제거)
   - ESP32 → Wi-Fi → Worker `/ingest-device-event` 기존 흐름 정상
   - `events` 문서 생성 성공
   - **`devices/dev-device-livingroom.lastEventAt` timestamp 필드가 실제로 생성/갱신됨**
@@ -784,7 +788,7 @@ FCM 푸시 · Firebase Auth · Firestore rules 강화 · events enum 변경 → 
 
 > ✅ **Cloudflare Worker 배포 · Firebase Console `firestore.rules` 게시 · ESP32-S3 실기기 업로드
 > 모두 완료했고, 아래 "실기기 E2E 검증 완료" 절차대로 online → offline → online 왕복을
-> 실물 하드웨어로 확인했다.**  (HC-SR501 PIR 실물 센서 구간만 여전히 pending.)
+> 실물 하드웨어로 확인했다.**  (HC-SR501 PIR 실물 센서 E2E 는 Phase 3 에서 별도 완료.)
 
 ### Heartbeat 정책
 
@@ -830,7 +834,7 @@ allow update: if request.resource.data.diff(resource.data)
 - 전송 시점: **A)** 부팅 후 Wi-Fi 연결 시 1회, **B)** 이후 `HEARTBEAT_INTERVAL_MS` 마다,
   **C)** Wi-Fi 재연결 시 즉시 (busy-loop 없음, 무한 재시도 없음)
 - `loop()` 에 `handleHeartbeat();` 한 줄 추가한 것 외 **`wifiConnect()`/`handlePir()`/`postEvent()`/
-  `setup()`/PIR TEMP TEST 는 전부 그대로.**
+  `setup()` 은 그대로.** (당시 유지했던 부팅 TEMP TEST 는 Phase 3 PIR 실물 E2E 완료 후 제거.)
 - motion 과 heartbeat 는 의미상 분리(사람 신호 vs 기기 신호)만 하고, coalescing(motion 있으면
   heartbeat 생략) 같은 최적화는 이번 단계에서 하지 않았다 — 필요하면 향후 최적화 대상.
 
@@ -869,12 +873,12 @@ allow update: if request.resource.data.diff(resource.data)
    기기 offline 이어도 사람 축 문구가 "오늘도 별일 없어요" 로 오염되지 않고,
    기기 online 이어도 사람 CHECK 는 "한번 확인해 주세요" 로 정상 표시됨 (`CHECK ≠ 센서 offline`).
 
-**[아직 pending]**
-- **HC-SR501 PIR 실물 센서 → GPIO4 → `handlePir()` 상승 에지** 경로는 미검증 (PIR 미연결).
-- 이번 USB 분리/재연결 중 관측된 `motion_detected` 는 **GPIO4 floating 가능성**이 있어
-  **PIR 실물 E2E 성공으로 기록하지 않는다.** (heartbeat 는 PIR 입력과 무관하게 타이머로만 전송)
-- `esp32-pir.ino` 의 **TEMP TEST 블록(부팅당 `motion_detected` 1회)은 아직 유지** —
-  PIR 실물 센서 E2E 검증 시 함께 제거 예정.
+**[PIR 실물 E2E — Phase 3 에서 완료]**
+- **HC-SR501 PIR 실물 센서 → GPIO4 상승 에지 → `handlePir()` → HTTP 201 → 앱 반영** 검증 완료.
+  (GPIO4 진단용 TEMP DEBUG 로 `LOW -> HIGH` transition 확인 후, 실제 움직임으로 E2E 확인.)
+- 검증 후 `setup()` 의 부팅 TEMP TEST 블록과 GPIO4 TEMP DEBUG 를 **모두 제거**했다
+  (`scripts/firmware-check.mjs` 가 재유입 차단, 정적 검사 12건).
+- 장기 안정성 / 낙상 감지 / 추가 센서는 아직 범위 아님.
 
 ---
 
@@ -1113,7 +1117,7 @@ tsc(`--noEmit`) · Metro · esbuild(Worker) · Node 스모크 러너가 모두 �
 
 ## 이번 Phase(3) 에서 구현하지 않은 것
 
-로그인 UI / OAuth · Firebase Auth · HC-SR501 PIR 실물 센서 E2E (센서 미도착) ·
+로그인 UI / OAuth · Firebase Auth · PIR 장기 안정성 / 낙상 감지 / 추가 센서 ·
 service account 기반 서버 인증 · per-device key · Cloud Functions · MQTT ·
 Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · AI / ML ·
 119 자동 신고 · 관리자 페이지 · 결제 · 여러 보호대상 전환 UI

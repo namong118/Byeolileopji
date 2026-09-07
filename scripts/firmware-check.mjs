@@ -2,7 +2,11 @@
  * esp32-pir.ino 정적 구조 검사 (완전한 컴파일이 아님).
  *
  * 실제 컴파일은 Arduino IDE / xtensa-esp-elf-g++ 로 사용자가 확인한다.
- * 여기서는 회귀(중괄호 깨짐 / setup·loop 누락 / TEMP TEST 제거 / motion 경로 손상)를 막는다.
+ * 여기서는 회귀(중괄호 깨짐 / setup·loop 누락 / motion·heartbeat 경로 손상 /
+ * 임시 진단 코드 잔존)를 막는다.
+ *
+ * PIR 실물 E2E 검증 완료 후: setup() 의 부팅 TEMP TEST 블록과 GPIO4 TEMP DEBUG 를
+ * 제거했다. 이 검사기는 그것들이 다시 들어오지 않는지 확인한다.
  *
  * 실행:  node scripts/firmware-check.mjs   (npm run test:smoke 에 포함)
  */
@@ -46,20 +50,43 @@ check('loop() 가 handlePir() 와 handleHeartbeat() 를 모두 호출한다', ()
   assert.ok(/handlePir\(\);/.test(loopBody), 'loop 에서 handlePir() 호출 없음');
   assert.ok(/handleHeartbeat\(\);/.test(loopBody), 'loop 에서 handleHeartbeat() 호출 없음');
   assert.ok(/wifiConnect\(\);/.test(loopBody), 'loop 에서 wifiConnect() 호출 없음');
+  assert.ok(!/handlePirDebug\(\);/.test(loopBody), 'loop 에 TEMP DEBUG 호출이 남아 있음');
 });
 
-check('기존 motion 경로 유지 (handlePir 가 postEvent("motion_detected") 호출)', () => {
+check('motion 경로 (handlePir: 상승 에지 → cooldown → postEvent("motion_detected"))', () => {
   const pirBody = raw.slice(raw.indexOf('void handlePir()'), raw.indexOf('void setup()'));
   assert.ok(/postEvent\("motion_detected"\)/.test(pirBody));
   assert.ok(/MOTION_COOLDOWN_MS/.test(pirBody), '쿨다운 로직 유지');
   assert.ok(/lastPirState == LOW/.test(pirBody), '상승 에지 로직 유지');
 });
 
-check('PIR TEMP TEST 블록 유지 (부팅당 motion_detected 1회)', () => {
-  assert.ok(/─── TEMP TEST/.test(raw), 'TEMP TEST 시작 마커 없음');
-  assert.ok(/─── \/TEMP TEST/.test(raw), 'TEMP TEST 종료 마커 없음');
-  const temp = raw.slice(raw.indexOf('─── TEMP TEST'), raw.indexOf('─── /TEMP TEST'));
-  assert.ok(/postEvent\("motion_detected"\)/.test(temp), 'TEMP TEST 의 motion 전송 유지');
+check('PIR pin 은 GPIO4 (config.h PIR_PIN 4) + 펌웨어는 PIR_PIN 사용', () => {
+  const cfg = fs.readFileSync(
+    new URL('../firmware/esp32-pir/config.h', import.meta.url),
+    'utf8',
+  );
+  assert.ok(/#define\s+PIR_PIN\s+4\b/.test(cfg), 'config.h PIR_PIN 이 4 가 아님');
+  assert.ok(/digitalRead\(PIR_PIN\)/.test(raw), 'digitalRead(PIR_PIN) 없음');
+  assert.ok(/pinMode\(PIR_PIN,\s*INPUT\)/.test(raw), 'pinMode(PIR_PIN, INPUT) 없음');
+});
+
+check('PIR warmup 유지 (PIR_WARMUP_MS)', () => {
+  assert.ok(/PIR_WARMUP_MS/.test(raw), 'PIR_WARMUP_MS 참조 없음');
+  assert.ok(/warmup done, sensing active/.test(raw), 'warmup 완료 로그 없음');
+});
+
+check('임시 진단 코드 없음 — 부팅 TEMP TEST 제거됨 (PIR 실물 E2E 완료)', () => {
+  assert.ok(!/TEMP TEST/.test(raw), 'TEMP TEST 마커가 아직 있음');
+  assert.ok(!/\[TEST\]/.test(raw), '[TEST] 로그가 아직 있음');
+  // setup() 이 부팅당 이벤트를 보내지 않는다
+  const setupBody = raw.slice(raw.indexOf('void setup()'), raw.indexOf('void loop()'));
+  assert.ok(!/postEvent\(/.test(setupBody), 'setup() 이 아직 postEvent 를 호출함');
+});
+
+check('임시 진단 코드 없음 — GPIO4 TEMP DEBUG 제거됨', () => {
+  assert.ok(!/TEMP DEBUG/.test(raw), 'TEMP DEBUG 마커가 아직 있음');
+  assert.ok(!/\[PIR DEBUG\]/.test(raw), '[PIR DEBUG] 로그가 아직 있음');
+  assert.ok(!/handlePirDebug/.test(raw), 'handlePirDebug 가 아직 있음');
 });
 
 check('heartbeat 는 config.h 상수를 쓴다 (하드코딩 30초 아님)', () => {

@@ -18,13 +18,12 @@
 | Worker → Firestore `events` 생성 + `devices.lastEventAt` 갱신 → 앱 실시간 반영 | ✅ 실기기 검증 완료 (Phase 4.1a) |
 | **heartbeat (`sendHeartbeat`/`handleHeartbeat`, Phase 4.1b)** | ✅ **실기기 업로드 + `[HB] 200` 확인 · `devices.lastHeartbeatAt` 갱신 · 앱 `online`/`heartbeat_fresh` 확인** |
 | **heartbeat online → 전원 차단 → offline → 재연결 → online 왕복 (Phase 4.1b)** | ✅ **실기기 검증 완료** (테스트값 heartbeat 30초 / offline 2분 / recompute 15초 — 원복함) |
-| 사람 움직임 → HC-SR501 PIR → GPIO4 → ESP32-S3 | ⏳ **pending** (PIR 센서/브레드보드 미연결. USB 분리/재연결 중 관측된 floating `motion_detected` 는 PIR E2E 성공으로 기록 안 함) |
+| **사람 움직임 → HC-SR501 PIR → GPIO4 → ESP32-S3 → `handlePir()` → HTTP 201 → 앱** | ✅ **실물 센서 E2E 검증 완료** (아래 "PIR 실물 E2E 검증" 참고) |
 
-> 네트워크 E2E 는 현재 `esp32-pir.ino` 의 `setup()` 에 있는 **TEMP TEST 블록**
-> (`[TEST]` 로그, 부팅당 `motion_detected` 1회 전송) 으로 검증했다.
-> **PIR 센서가 도착하면 이 블록을 제거**하고, 배선(VCC-5V / GND-GND / OUT-GPIO4) 후
-> 실제 상승 에지 → `handlePir()` 경로로 재검증한다. (Phase 4.1b 작업에서 TEMP TEST 는
-> 건드리지 않았다.)
+> 초기 네트워크 E2E 는 `setup()` 의 임시 **TEMP TEST 블록**(`[TEST]` 로그, 부팅당
+> `motion_detected` 1회)과 GPIO4 진단용 **TEMP DEBUG**(`[PIR DEBUG]` 로그)로 확인했다.
+> **PIR 실물 센서 E2E 가 성공했으므로 두 임시 블록 모두 제거**했다.
+> `scripts/firmware-check.mjs` 가 재유입을 막는다.
 
 ## 하드웨어
 
@@ -127,7 +126,7 @@ heartbeat 로그 (Phase 4.1b):
 - **시간**: `occurredAt` / `createdAt` 은 **서버(Worker)가 생성**. ESP32 시계가 틀려도 타임라인이 안 깨진다.
 - **heartbeat (Phase 4.1b)**: 부팅 시 1회 + `HEARTBEAT_INTERVAL_MS`(기본 10분)마다 + Wi-Fi 재연결 시
   즉시. `events` 문서는 만들지 않고 `devices.lastHeartbeatAt` 만 갱신. 실패해도 무한 재시도 안 함
-  (최대 2회, 다음 주기가 커버). `handlePir()`/`postEvent()`/워밍업/쿨다운/TEMP TEST 는 무변경.
+  (최대 2회, 다음 주기가 커버). `handlePir()`/`postEvent()`/워밍업/쿨다운은 무변경.
 
 ## 하드웨어 없이 먼저 테스트
 
@@ -164,9 +163,31 @@ heartbeat 로그 (Phase 4.1b):
 > `EXPO_PUBLIC_STATUS_RECOMPUTE_INTERVAL_MS` 15초)은 **모두 원복**했다. 코드 기본값은
 > heartbeat 10분 / offline 25분 그대로다.
 
-**아직 pending:** HC-SR501 PIR 실물 센서 → GPIO4 → `handlePir()` 경로. PIR 미연결 상태에서
-관측된 `motion_detected` 는 GPIO4 floating 가능성이 있어 PIR E2E 성공으로 기록하지 않는다.
-`esp32-pir.ino` 의 TEMP TEST 블록도 PIR 실물 검증 때까지 유지한다.
+## PIR 실물 E2E 검증 (Phase 3 하드웨어 파이프라인) — ✅ 완료
+
+HC-SR501 실물 센서를 GPIO4 에 연결해 **사람 움직임 → 앱 반영** 전체 경로를 실기기로 확인했다 (사용자).
+
+배선: `VCC → ESP32-S3 5V` · `GND → GND` · `OUT → GPIO4`
+
+| # | 확인 항목 | 결과 |
+| --- | --- | --- |
+| 1 | HC-SR501 실물 배선 + 5V 전원 + 60초 워밍업 | ✅ `[PIR] warmup done, sensing active` |
+| 2 | GPIO4 신호 도달 (진단 로그) | ✅ `[PIR DEBUG] transition LOW -> HIGH` / `GPIO4=HIGH` / `HIGH -> LOW` / `GPIO4=LOW` |
+| 3 | 실제 사람 움직임 → `handlePir()` 상승 에지 감지 | ✅ `[PIR] motion detected` |
+| 4 | `postEvent("motion_detected")` → Worker | ✅ `[HTTP] POST /ingest-device-event` → `[HTTP] 201 {... "eventType":"motion_detected" ...}` → `[Event] sent successfully` |
+| 5 | 쿨다운 (`MOTION_COOLDOWN_MS`) | ✅ `[PIR] motion (in cooldown, ignored)` 정상 |
+| 6 | Firestore `events` 문서 생성 + `devices.lastEventAt` 갱신 경로 | ✅ |
+| 7 | Expo 보호자 앱 실시간 반영 | ✅ "활동이 확인됐어요" 표시 |
+
+전체 E2E: `사람 움직임 → HC-SR501 → GPIO4 → ESP32-S3 → Wi-Fi → Cloudflare Worker →
+HTTP 201 → Firestore events → devices.lastEventAt → Expo 앱 실시간 반영` **성공.**
+
+검증 후 `setup()` 의 부팅 TEMP TEST 블록과 GPIO4 TEMP DEBUG 를 **모두 제거**했다.
+`handlePir()` / `postEvent()` / `sendHeartbeat()` / `handleHeartbeat()` / GPIO4 / 쿨다운 / 워밍업은
+그대로다.
+
+> 범위: 단일 세션 실기기 E2E 까지 확인. **장기 안정성(며칠 연속 운영) · 낙상 감지 · 추가 센서는
+> 아직 검증 범위 아님.**
 
 ## ⚠️ 보안 (DEVELOPMENT / POC)
 
