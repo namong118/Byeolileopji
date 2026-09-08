@@ -11,6 +11,24 @@ FIREBASE_PROJECT_ID = "byeolileopji"
 # FIREBASE_API_KEY 는 선택 (쿼터 귀속용). 넣으려면 아래 주석 해제:
 # FIREBASE_API_KEY = ""
 
+# ── Phase 4.3 STEP B-4 — scheduled() careStatus 계산 대상 + 서버 threshold ──
+# 전부 비밀 아님 (앱의 공개 dev 고정 id / placeholder threshold).
+#   대상: Auth 도입 전까지 단일 dev recipient. 코드에 하드코딩하지 않고 여기서 주입한다.
+CARE_RECIPIENT_ID = "dev-care-recipient"
+DEVICE_ID = "dev-device-livingroom"
+#   서버 threshold — 앱 production default 와 동일. **초기 운영값, 실사용 데이터로 튜닝 필요.**
+#   ⚠️ 앱 개발용 EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES=2 override 와 무관 (Expo client 전용).
+#   ⚠️ Cron cadence(10분) 와 별개 개념 — offline threshold 를 10분으로 바꾸지 않는다.
+INACTIVITY_CHECK_MINUTES = "180"
+DEVICE_OFFLINE_MINUTES = "25"
+EMERGENCY_LOOKBACK_HOURS = "12"
+EMERGENCY_TTL_HOURS = "12"
+
+# ── Cron Trigger — 10분마다 scheduled() 실행 (Phase 4.3 STEP B-4) ──
+# Cron cadence ≠ 상태 threshold. Cron 은 "주기적 재평가" 트리거일 뿐이다.
+[triggers]
+crons = ["*/10 * * * *"]
+
 # 비밀은 vars 에 두지 않는다. 아래 명령으로 등록한다:
 #   npx wrangler secret put DEVICE_KEY
 #

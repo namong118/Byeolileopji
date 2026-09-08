@@ -80,7 +80,9 @@ Phase 4.3  🚧  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
               ├─ ✅  STEP B-3 — 이전 스냅샷 vs 새 스냅샷 → 상태 전환 감지 (순수 `deriveCareStatusTransition`,
               │       사람 축/기기 축 독립, reason 변화는 전환 아님, 초기 스냅샷 = baseline,
               │       history/FCM 없음, 스모크 23건. 실제 write 검증은 여전히 rules 게시 후)
-              └─ ⏳  STEP B-4 — `wrangler.toml` cron + `scheduled()` deploy
+              └─ ✅  STEP B-4 — `wrangler.toml` cron(`*/10 * * * *`) + Worker `scheduled()` →
+                      `runScheduledCareStatus` → B-3 pipeline (code + 스모크 22건).
+                      ⚠️ production Cron 배포 · 실제 Firestore write E2E 는 아직 pending
 Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
@@ -405,7 +407,7 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | `npm run lint` | ✅ 통과 |
 | `npx expo-doctor` | ⚠️ 20/21 (`expo` 57.0.19 / `expo-router` 57.0.18 이 SDK 핀 `~57.0.20` / `~57.0.19` 과 패치 버전 불일치 — 이번 작업과 무관한 기존 이슈, 의존성 변경 안 함, 별도 `npx expo install --check` 대상) |
 | `npx expo export --platform android` | ✅ 번들 성공 (firebase JS SDK 포함) |
-| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 23 + 18 + 13 + 23 + 7 + 12 = 190 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, 서버 판정 코어 + parity 23, 서버 Firestore READ adapter 18, 서버 careStatus snapshot serialize+write 13, careStatus 전환 감지 23, rules 정적 7, firmware 정적 12) |
+| `npm run test:smoke` | ✅ 11 + 38 + 15 + 30 + 23 + 18 + 13 + 23 + 22 + 7 + 12 = 212 통과 (앱 매핑 11, Worker ingest+heartbeat 38, 사람 축 15, 기기 축 + 홈 표시 30, 서버 판정 코어 + parity 23, 서버 Firestore READ adapter 18, 서버 careStatus snapshot serialize+write 13, careStatus 전환 감지 23, Cron scheduled() 파이프라인 22, rules 정적 7, firmware 정적 12) |
 | Phase 2.5 hosted Firestore WRITE / READ / 재시작 persistence / 외부→앱 실시간 | ✅ 사용자 검증 완료 |
 | Phase 3 Worker 배포 → `POST /ingest-device-event` 201 → `events` 문서 생성 → 앱 실시간 반영 | ✅ 사용자 검증 완료 |
 | Phase 3 **ESP32-S3 실기기** 네트워크 E2E (실기기 → Wi-Fi → Worker → 인증 → Firestore → 앱) | ✅ 사용자 검증 완료 |
@@ -1322,22 +1324,120 @@ isInitial = true, personTransition = null, deviceTransition = null, changed = fa
   malformed previous → 422 throw.
 - B-2 회귀: `computeAndWriteCareStatusSnapshot` 그대로 동작 (transition 안 만듦).
 
-`esbuild --bundle careStatusWriter.js` ✅ (16.2kb, `careStatusTransition.ts` 공유 심볼 번들됨) ·
-`wrangler deploy --dry-run` ✅ (`index.js` 무변경 — B-4 에서 `scheduled()` 연결).
+`esbuild --bundle careStatusWriter.js` ✅ (16.2kb, `careStatusTransition.ts` 공유 심볼 번들됨).
 
-### STEP B-4 / Phase 4.4 에서 할 일
+---
 
-- **STEP B-4**: `wrangler.toml` `[triggers] crons` + `scheduled()` → `computeCompareAndWriteCareStatusSnapshot`.
-  **운영 threshold 확정** (Worker `[vars]`, 앱 개발 override 와 분리 유지). Worker deploy + `firestore.rules` 게시.
-  (선택) previous READ 를 raw source READ 와 병렬화.
-- (선택) `events` `eventType` 필터용 복합 인덱스 추가 여부 결정.
-- **지속 ack 저장소** 설계 (서버 EMERGENCY 를 보호자가 확인 처리 — 현재 서버 EMERGENCY 는 TTL 로만 만료).
-- **Phase 4.4**: `changed === true` 인 `personTransition` / `deviceTransition` → FCM 푸시.
-  Firebase Auth + `firestore.rules` 좁히기 (careStatus read = linked guardian, write = 서버만).
-  최초 스냅샷(`isInitial`) 알림 정책 재검토. reason-sensitive 정책 필요 여부 판단.
+## Phase 4.3 STEP B-4 — Cloudflare Cron → `scheduled()` → careStatus 파이프라인 자동 실행
 
-> ⚠️ **실제 dev/prod Firestore write·전환 검증은 여전히 pending** — careStatus rules 가 아직
-> 게시되지 않았다. 사용자가 rules 게시 후 actual write/transition 을 따로 검증한다.
+> ⛔ 여전히 없는 것: **production Worker deploy** · 실제 Cron Trigger 등록 · Cloudflare
+> dashboard 변경 · `firestore.rules` publish · FCM · notification · transition history write ·
+> Firebase Auth · multi-recipient scheduling · 앱/펌웨어 변경.
+> 이번 단계는 **코드 + 자동 테스트까지** — 실제 자동 실행 배포는 pending.
+
+B-1~B-3 의 careStatus pipeline 을 **10분마다 Cloudflare 가 자동 실행**하도록 연결한다.
+
+```
+wrangler.toml [triggers] crons = ["*/10 * * * *"]
+      │  10분마다
+      ▼
+index.js  scheduled(controller, env)          ← 기존 fetch() 핸들러는 그대로
+      │  runScheduledCareStatus(env, { now: controller.scheduledTime })
+      ▼
+server/cloudflare-worker/src/scheduled.js
+      │  대상별: computeCompareAndWriteCareStatusSnapshot()   ← B-3, 재사용 (재구현 아님)
+      ▼
+{ now, results: [{ careRecipientId, status, deviceHealth, isInitial, changed,
+                   personTransition, deviceTransition }] }
+```
+
+### Cron cadence ≠ 상태 threshold
+
+- **Cron cadence = 10분** (`*/10 * * * *`). "주기적 재평가" 트리거일 뿐 — 판정 로직이 아니다.
+- **상태 threshold 는 그대로**: inactivity 180분 / device offline 25분 / emergency 12h.
+  Cron 이 10분이라고 offline threshold 를 10분으로 바꾸지 않는다 (서로 다른 개념).
+- **SOS/EMERGENCY 즉시 경로**: 향후 실제 긴급 알림은 이 10분 주기를 기다리면 안 된다
+  (ingest → 즉시 EMERGENCY/FCM 은 Phase 4.4). 이번 단계는 ingest endpoint 에 새 side effect 를
+  넣지 않아 그 즉시 경로를 막지 않는다.
+
+### 대상 careRecipient — 단일 dev recipient (env 주입)
+
+- 현재 Auth/guardian model 이전이라 **단일 대상**. 대상 id 는 `wrangler.toml [vars]` 의
+  `CARE_RECIPIENT_ID` / `DEVICE_ID` 에서 온다 — 코드에 `dev-care-recipient` 를 하드코딩하지 않는다.
+- `resolveScheduledTargets(env)` 가 `[{ careRecipientId, deviceId }]` 를 반환. env 누락 시 throw.
+- multi-recipient scheduling 은 Phase 4.4 이후 여기서 Firestore 목록을 읽도록 확장 —
+  지금 그 구조를 만들지 않는다.
+
+### 서버 threshold — Worker env 독립 (`scheduled.js`)
+
+- `resolveServerThresholds(env)` — `wrangler.toml [vars]` (`INACTIVITY_CHECK_MINUTES` /
+  `DEVICE_OFFLINE_MINUTES` / `EMERGENCY_LOOKBACK_HOURS` / `EMERGENCY_TTL_HOURS`) 를 읽는다.
+- **`EXPO_PUBLIC_*` 를 절대 참조하지 않는다.** 앱 개발용 `EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES=2`
+  override 는 Expo client 전용 — Worker 는 이 값을 주워오지 않는다 (스모크로 고정).
+- `DEFAULT_SERVER_THRESHOLDS` = 앱 `careStatusConfig.ts` **production default 와 동일**
+  (180 / 25 / 12 / 12). **초기 제품 운영값이며 실사용(수면·외출·센서 위치·생활 패턴) 데이터로
+  튜닝해야 한다** — 의학적/안전 기준으로 확정된 값이 아니다.
+
+### 초기 baseline / 반복 실행 (B-3 정책 그대로)
+
+- `careStatus/{id}` 없는 첫 Cron 실행 → `isInitial: true`, `changed: false`, 전환 없음,
+  NEXT 스냅샷 write. Cron 최초 실행이라고 별도 전환을 만들지 않는다.
+- 같은 상태가 유지되는 동안 매 Cron 마다 전환이 발생하면 안 된다 — B-3 detector 를 그대로
+  재사용해 보장. (스모크: `NORMAL→NORMAL→CHECK→CHECK` 4 tick, `changed` 는 3번째만 true)
+
+### `scheduled()` 실패 처리 / `waitUntil`
+
+- `scheduled()` 는 `await runScheduledCareStatus(...)` 후 오류를 `catch → console.error → 재throw`.
+  → Cloudflare 가 해당 invocation 을 **실패로 기록** (dashboard / `wrangler tail` 관찰 가능).
+  READ/compute/previous READ/WRITE 어디서 실패하든 성공("completed")으로 삼키지 않는다.
+- **`ctx.waitUntil` 미사용**: 단일 순차 pipeline 이라 핸들러 promise 밖으로 넘길 fire-and-forget
+  작업이 없다. `await` 직접 → 런타임이 완료까지 대기하고 throw 시 실패 표시. `waitUntil` 은
+  rejection 이 조용히 사라질 위험이 있어 이 경우 이득이 없다.
+- 진단 로그: `[care-status] scheduled compute ok recipient=… status=… device=… initial=… changed=… person=… device.transition=…`
+  (`careRecipientId` 는 불투명 문서 id, `status`/`deviceHealth` 는 enum — 개인정보/secret 없음).
+
+### 변경 / 신규 파일
+
+| 파일 | 변경 |
+| --- | --- |
+| `server/cloudflare-worker/src/scheduled.js` | **신규** — `runScheduledCareStatus` / `resolveServerThresholds` / `resolveScheduledTargets` / `DEFAULT_SERVER_THRESHOLDS`. Cloudflare runtime 없이 Node 스모크에서 테스트 가능 |
+| `server/cloudflare-worker/src/index.js` | `scheduled(controller, env)` 추가 (+`runScheduledCareStatus` import). **`fetch()` 핸들러·ingest·heartbeat 는 한 줄도 안 건드림** |
+| `server/cloudflare-worker/wrangler.toml` | `[triggers] crons` + `[vars]` 에 `CARE_RECIPIENT_ID`/`DEVICE_ID`/threshold 4개 (전부 비밀 아님). secret 없음 |
+| `scripts/phase43-scheduled-smoke.mjs` | **신규** — 22건 |
+| `package.json` | `test:smoke` 체인에 추가 |
+
+### 검증
+
+`scripts/phase43-scheduled-smoke.mjs` (**22건**) — `fetch` mock:
+- wrangler.toml: `crons = ["*/10 * * * *"]`, 대상/threshold vars 존재, **secret 값 없음**.
+- `index.js` default export: `scheduled` 추가 + `fetch` 유지 / `GET /health` → `{ ok: true }` / 미지 경로 → 404 (fetch 회귀 없음).
+- `resolveServerThresholds`: 기본 180/25/12/12, `EXPO_PUBLIC_*` 무시(process.env 세팅해도), env var override(문자열/숫자/잘못된 값).
+- `resolveScheduledTargets`: env 단일 대상, 누락 시 throw.
+- `runScheduledCareStatus`: initial baseline(404) `changed:false`+write, `NORMAL→NORMAL→CHECK→CHECK` 반복 전환 중복 없음, `NORMAL→CHECK` person transition, `online→offline` device transition, 두 축 동시, offline threshold(20분<25분)는 Cron 10분과 무관하게 online 유지.
+- 실패: events runQuery 500 → rejects(`PATCH` 0), careStatus PATCH 500 → rejects, previous READ 403 → rejects(`PATCH` 0).
+- `scheduled()`: `controller.scheduledTime` 을 `now` 로 사용(`computedAt` 확인), 실패 시 re-throw.
+- B-2 회귀: `computeAndWriteCareStatusSnapshot` 그대로.
+
+`esbuild --bundle index.js` ✅ (29.1kb) · `scheduled.js` ✅ (18.5kb) ·
+`wrangler deploy --dry-run` ✅ (bundle 31.63 KiB, `[vars]` 7개 바인딩 인식, `[triggers]` 파싱 OK — **실제 deploy 안 함**).
+
+### Phase 4.4 / 실배포에서 할 일
+
+- **실배포 순서** (사용자): ① `firestore.rules` 의 `careStatus` 블록 게시 → ② `npx wrangler deploy`
+  (Cron Trigger 자동 등록) → ③ Cloudflare dashboard 에서 scheduled invocation 로그 확인
+  (`wrangler tail`) → ④ `careStatus/dev-care-recipient` 문서가 실제로 생성/갱신되는지 확인 →
+  ⑤ 활동 없이 방치 → 다음 Cron 에서 `NORMAL→CHECK` 전환이 로그에 찍히는지 확인.
+- (선택) `scheduled.js` 에서 previous READ 를 raw source READ 와 병렬화.
+- (선택) `events` `eventType` 필터용 복합 인덱스.
+- **지속 ack 저장소** (서버 EMERGENCY 를 보호자가 확인 처리 — 현재 TTL 로만 만료).
+- **Phase 4.4**: `changed === true` 인 `personTransition` / `deviceTransition` → FCM 푸시
+  (write 성공 후). Firebase Auth + `firestore.rules` 좁히기 (careStatus read = linked guardian,
+  write = 서버만). 최초 스냅샷(`isInitial`) 알림 정책 재검토. SOS ingest → 즉시 EMERGENCY/FCM
+  경로 (10분 Cron 안 기다림). multi-recipient scheduling.
+
+> ⚠️ **Phase 4.3 전체가 production 완료된 것이 아니다.** STEP A~B-4 는 코드 + 자동 테스트 완료
+> 상태이고, production scheduled deployment · `firestore.rules` publish · 실제 scheduled
+> Firestore E2E 검증은 **모두 pending**.
 
 ---
 

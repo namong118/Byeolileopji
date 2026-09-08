@@ -6,6 +6,9 @@
  *                                                     ↓ onSnapshot
  *                                                별일없지 App
  *
+ *   Cloudflare Cron (*​/10 * * * *)  →  scheduled()  →  runScheduledCareStatus()
+ *             →  careStatus/{id} 서버 계산 스냅샷 + 전환 감지 (Phase 4.3 STEP B-4)
+ *
  * ⚠️ DEVELOPMENT / POC — NOT PRODUCTION READY (server/cloudflare-worker/README.md 참고)
  */
 
@@ -17,6 +20,7 @@ import {
 } from './validate.js';
 import { buildEventDoc } from './buildEvent.js';
 import { getDevice, createEvent, touchDevice, FirestoreError } from './firestore.js';
+import { runScheduledCareStatus } from './scheduled.js';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -50,6 +54,32 @@ export default {
     }
 
     return json({ ok: false, error: 'not_found' }, 404);
+  },
+
+  /**
+   * Cloudflare Cron Trigger — Phase 4.3 STEP B-4.
+   *
+   * `wrangler.toml` `[triggers] crons = ["*​/10 * * * *"]` → 10분마다 실행.
+   * Cron 은 판정 로직이 아니라 "10분마다 기존 careStatus pipeline 실행" 트리거일 뿐이다.
+   * (SOS/EMERGENCY 즉시 경로는 이 10분 주기를 기다리면 안 된다 — Phase 4.4 FCM.)
+   *
+   * 실패 시 throw 를 다시 던진다 → Cloudflare 가 이 scheduled invocation 을 **실패로 기록**
+   * (dashboard / `wrangler tail` 에서 관찰 가능). 성공("completed")으로 삼키지 않는다.
+   *
+   * `ctx.waitUntil` 미사용: 단일 순차 pipeline 이라 핸들러 promise 밖으로 넘길 작업이 없다.
+   * `await` 직접 → Workers 런타임이 완료까지 대기하고, throw 시 실패로 표시한다.
+   *
+   * @param {{ scheduledTime: number, cron: string }} controller
+   * @param {object} env
+   */
+  async scheduled(controller, env) {
+    try {
+      await runScheduledCareStatus(env, { now: new Date(controller.scheduledTime) });
+    } catch (err) {
+      // err 는 FirestoreError / Error — 메시지에 token/key 없음 (firestore.js safeText 는 본문 500자).
+      console.error(`[care-status] scheduled compute FAILED: ${err}`);
+      throw err; // Cloudflare 가 invocation 을 실패로 기록하도록 재throw
+    }
   },
 };
 
