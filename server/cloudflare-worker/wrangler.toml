@@ -33,3 +33,15 @@ crons = ["*/10 * * * *"]
 #   npx wrangler secret put DEVICE_KEY
 #
 # 로컬 개발(`wrangler dev`)에서는 .dev.vars 파일을 사용한다 (.gitignore 처리됨).
+
+# ── Observability — Worker logs / invocation logs 저장 ──
+# Phase 4.3 STEP B-4 production 관찰용. Cloudflare Dashboard 수동 활성화에 의존하지 않고
+# repository(wrangler.toml)에 고정한다 → 다음 배포에서도 유지된다.
+#   enabled          : Worker logs 저장 활성화 (Dashboard > Workers > Observability > Logs 에서 조회)
+#   invocation_logs  : fetch / scheduled(Cron) invocation 단위 로그 (기본 true, 명시 고정)
+# 비밀 아님. 관찰 설정만.
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = true
