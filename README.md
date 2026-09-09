@@ -67,23 +67,25 @@ Home UX A–D ✅  보호자 홈 화면 정보구조 압축 (판정 로직·개�
               ├─ ✅  복약·워치·평상시 SOS·외출/귀가·중복 offline 경고·별도 offline 문장 홈에서 제거
               ├─ ✅  오전/오후 12시간 표기 통일 · "오늘 활동" = 생활 움직임(모션/문/외출/귀가) 전용 집계
               └─ ✅  날짜 경계(자정 넘김) 실기기 확인 — 전날 lastActivity 유지 / 당일 활동·기록 0건 독립 표시
-Phase 4.3  🚧  Cloudflare cron + 서버측 상태 판정 (careStatus 문서)
+Phase 4.3  ✅  Cloudflare cron + 서버측 상태 판정 (careStatus 문서) — production 자동 실행 E2E 완료
               ├─ ✅  STEP A — 서버 재사용 가능한 순수 판정 코어 `computeCareStatusSnapshot`
               │       (deriveCareStatus + deriveDeviceHealth 조합, threshold 주입, now 주입,
-              │        client↔server parity 스모크, Firestore write·cron·deploy 없음)
+              │        client↔server parity 스모크)
               ├─ ✅  STEP B-1 — Firestore READ → normalize → 공유 코어 compute
               │       (Worker `firestoreRead.js` + `careStatusReader.js`, events `:runQuery`
               │        + devices point read, **READ ONLY**, 실제 dev Firestore READ 검증 완료)
-              ├─ ✅  STEP B-2 — careStatus 스냅샷 스키마 + Firestore write (serialize 순수 분리,
-              │       `careStatus/{careRecipientId}` deterministic overwrite, 실패 = throw,
-              │       스모크 13건. 운영 threshold 확정 · 실제 write 검증은 rules 게시 후)
+              ├─ ✅  STEP B-2 — careStatus 스냅샷 스키마 + deterministic Firestore write
+              │       (serialize 순수 분리, `careStatus/{careRecipientId}` overwrite, 실패 = throw,
+              │        스모크 13건. **실제 careStatus 문서 write 검증 완료**)
               ├─ ✅  STEP B-3 — 이전 스냅샷 vs 새 스냅샷 → 상태 전환 감지 (순수 `deriveCareStatusTransition`,
               │       사람 축/기기 축 독립, reason 변화는 전환 아님, 초기 스냅샷 = baseline,
-              │       history/FCM 없음, 스모크 23건. 실제 write 검증은 여전히 rules 게시 후)
+              │       전환 중복 억제, history/FCM 없음, 스모크 23건 — 실제 production 전환 로그 관찰은 ⏳)
               └─ ✅  STEP B-4 — `wrangler.toml` cron(`*/10 * * * *`) + Worker `scheduled()` →
-                      `runScheduledCareStatus` → B-3 pipeline (code + 스모크 22건).
-                      ⚠️ production Cron 배포 · 실제 Firestore write E2E 는 아직 pending
-Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
+                      `runScheduledCareStatus` → B-3 pipeline (스모크 22건).
+                      ✅ production Worker deploy(`817c1165…`) · `firestore.rules` 게시 ·
+                      scheduled 강제 실행 Firestore E2E · **production Cron 자동 invocation 검증 완료**
+                      (2026-09-09 수동 실행 없이 `computedAt` 이 10분 경계 직후 자동 갱신 관측)
+Phase 4.4  ⏳  실제 production 전환 관찰 + FCM 푸시 + Firebase Auth + Firestore rules 좁히기
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
 
@@ -428,6 +430,12 @@ npm run test:smoke   # 순수 매핑/파생/폴백 스모크 테스트
 | **Phase 4.1b** 실기기 heartbeat E2E (heartbeat 로 online 유지 → 전원 차단 시 offline → 재연결 시 online) | ✅ **사용자 실기기 검증 완료** (테스트값: heartbeat 30초 / offline 임계 2분 / recompute 15초 — 전부 원복) |
 | **Phase 4.1b** 사람 축 CHECK 와 기기 축 offline 이 홈에서 혼동되지 않음 (CHECK ≠ 센서 offline) | ✅ **실기기 검증 완료** (전원 차단 시 "센서 연결을 확인하고 있어요" 로 정확히 전환) |
 | **Phase 4.1b** HC-SR501 PIR 실물 센서 → GPIO4 → heartbeat 와 병행 E2E | ✅ **실물 센서 E2E 검증 완료** (Phase 3 항목 참고. PIR motion + heartbeat 가 같은 펌웨어에서 병행 동작) |
+| **Phase 4.3 A** 공유 순수 판정 코어 `computeCareStatusSnapshot` + client↔server parity | ✅ 자동 스모크 23건 |
+| **Phase 4.3 B-1** Firestore READ(events `:runQuery` + devices point read) → normalize → compute | ✅ 자동 스모크 18건 (fetch mock) · ✅ **실제 dev Firestore READ 검증 완료** |
+| **Phase 4.3 B-2** careStatus 스냅샷 serialize + deterministic `careStatus/{id}` write | ✅ 자동 스모크 13건 · ✅ **실제 careStatus 문서 write 검증 완료** (scheduled 강제 실행) |
+| **Phase 4.3 B-3** 이전 스냅샷 비교 → 사람/기기 전환 감지 · 초기 baseline · 전환 중복 억제 | ✅ 자동 스모크 23건 · ⏳ production 실제 전환 로그 관찰은 미실시 |
+| **Phase 4.3 B-4** `scheduled()` + Cron `*/10 * * * *` + `runScheduledCareStatus` (서버 threshold Worker env 독립) | ✅ 자동 스모크 22건 · ✅ **production Worker deploy(`817c1165…`) + `firestore.rules` 게시** |
+| **Phase 4.3** production Cron 자동 invocation (수동 실행 없이 `careStatus.computedAt` 이 10분 경계 직후 자동 갱신) | ✅ **1회 관측 검증 완료** (2026-09-09, `computedAt` 19:30:38 KST / 확인 ≈ 19:33 KST) · ⏳ 연속 안정성·실패 경로 관찰은 미실시 |
 
 `jest-expo` 는 화면 3개 규모 대비 설정 비용이 커서 도입하지 않았다. Node 내장 TS 실행으로
 순수 함수(매핑·타임스탬프·파생·폴백·endpoint 검증·상태 판정·기기 판정)를 검증하고,
@@ -1330,25 +1338,37 @@ isInitial = true, personTransition = null, deviceTransition = null, changed = fa
 
 ## Phase 4.3 STEP B-4 — Cloudflare Cron → `scheduled()` → careStatus 파이프라인 자동 실행
 
-> ⛔ 여전히 없는 것: **production Worker deploy** · 실제 Cron Trigger 등록 · Cloudflare
-> dashboard 변경 · `firestore.rules` publish · FCM · notification · transition history write ·
-> Firebase Auth · multi-recipient scheduling · 앱/펌웨어 변경.
-> 이번 단계는 **코드 + 자동 테스트까지** — 실제 자동 실행 배포는 pending.
+> ✅ **production 배포 + Cron 자동 실행 검증 완료** — 아래 "Phase 4.3 Production Cron E2E 검증" 절 참고.
+> ⛔ 이 단계에 **없는 것**: FCM · notification · transition history write · Firebase Auth ·
+> multi-recipient scheduling · 앱/펌웨어 변경 · 실제 production 전환(NORMAL→CHECK 등) 로그 관찰.
+> 전환 semantics 는 mock/자동 테스트로만 검증됨 (Phase 4.4 에서 실관찰).
 
 B-1~B-3 의 careStatus pipeline 을 **10분마다 Cloudflare 가 자동 실행**하도록 연결한다.
 
 ```
-wrangler.toml [triggers] crons = ["*/10 * * * *"]
-      │  10분마다
-      ▼
-index.js  scheduled(controller, env)          ← 기존 fetch() 핸들러는 그대로
-      │  runScheduledCareStatus(env, { now: controller.scheduledTime })
-      ▼
-server/cloudflare-worker/src/scheduled.js
-      │  대상별: computeCompareAndWriteCareStatusSnapshot()   ← B-3, 재사용 (재구현 아님)
-      ▼
-{ now, results: [{ careRecipientId, status, deviceHealth, isInitial, changed,
-                   personTransition, deviceTransition }] }
+ ESP32 (PIR motion / heartbeat)  ──► Worker /ingest-device-event, /device-heartbeat
+                                          │
+                                          ▼
+                              Firestore  events + devices/{id}   (raw)
+                                          │
+   Cloudflare Cron  ── */10 * * * * ──►  scheduled(controller, env)          [index.js]
+                                          │  runScheduledCareStatus(env, { now: controller.scheduledTime })
+                                          ▼
+                              scheduled.js  (대상 = CARE_RECIPIENT_ID/DEVICE_ID env, threshold = Worker env)
+                                          │  computeCompareAndWriteCareStatusSnapshot()   ← B-1~B-3 재사용 (재구현 아님)
+                                          ▼
+       READ events + devices/{id}  ─►  normalize  ─►  shared care status core  (deriveCareStatus + deriveDeviceHealth)
+                                          │
+                              READ previous careStatus/{id}   ─►  transition detect (person / device 독립)
+                                          │
+                                          ▼
+                   Firestore  careStatus/{careRecipientId}  overwrite   (derived, 문서 1개)
+                                          │
+                                          ▼
+                   { status, deviceHealth, isInitial, changed, personTransition, deviceTransition }
+                                          │
+                                          ▼
+                              (Phase 4.4)  changed === true → FCM 푸시
 ```
 
 ### Cron cadence ≠ 상태 threshold
@@ -1419,25 +1439,123 @@ server/cloudflare-worker/src/scheduled.js
 - B-2 회귀: `computeAndWriteCareStatusSnapshot` 그대로.
 
 `esbuild --bundle index.js` ✅ (29.1kb) · `scheduled.js` ✅ (18.5kb) ·
-`wrangler deploy --dry-run` ✅ (bundle 31.63 KiB, `[vars]` 7개 바인딩 인식, `[triggers]` 파싱 OK — **실제 deploy 안 함**).
+`wrangler deploy --dry-run` ✅ (bundle 31.63 KiB, `[vars]` 7개 바인딩 인식, `[triggers]` 파싱 OK).
+production 배포/검증은 아래 "Phase 4.3 Production Cron E2E 검증" 절 참고.
 
-### Phase 4.4 / 실배포에서 할 일
+### 남은 개선 항목 (선택)
 
-- **실배포 순서** (사용자): ① `firestore.rules` 의 `careStatus` 블록 게시 → ② `npx wrangler deploy`
-  (Cron Trigger 자동 등록) → ③ Cloudflare dashboard 에서 scheduled invocation 로그 확인
-  (`wrangler tail`) → ④ `careStatus/dev-care-recipient` 문서가 실제로 생성/갱신되는지 확인 →
-  ⑤ 활동 없이 방치 → 다음 Cron 에서 `NORMAL→CHECK` 전환이 로그에 찍히는지 확인.
-- (선택) `scheduled.js` 에서 previous READ 를 raw source READ 와 병렬화.
-- (선택) `events` `eventType` 필터용 복합 인덱스.
+- (선택) `scheduled.js` 에서 previous careStatus READ 를 raw source READ 와 병렬화.
+- (선택) `events` `eventType` 필터용 복합 인덱스 (현재는 최근 100건 스캔).
 - **지속 ack 저장소** (서버 EMERGENCY 를 보호자가 확인 처리 — 현재 TTL 로만 만료).
-- **Phase 4.4**: `changed === true` 인 `personTransition` / `deviceTransition` → FCM 푸시
-  (write 성공 후). Firebase Auth + `firestore.rules` 좁히기 (careStatus read = linked guardian,
-  write = 서버만). 최초 스냅샷(`isInitial`) 알림 정책 재검토. SOS ingest → 즉시 EMERGENCY/FCM
-  경로 (10분 Cron 안 기다림). multi-recipient scheduling.
 
-> ⚠️ **Phase 4.3 전체가 production 완료된 것이 아니다.** STEP A~B-4 는 코드 + 자동 테스트 완료
-> 상태이고, production scheduled deployment · `firestore.rules` publish · 실제 scheduled
-> Firestore E2E 검증은 **모두 pending**.
+---
+
+## Phase 4.3 Production Cron E2E 검증
+
+> Phase 4.3 STEP A~B-4 의 **서버측 careStatus 자동화가 production Cloudflare 에서 실제로
+> 자동 실행됨**을 확인한 기록. FCM / Auth / 실제 전환 관찰은 여기 포함되지 않는다 (Phase 4.4).
+
+### 배포 상태
+
+| | |
+| --- | --- |
+| Worker | `byeolileopji-ingest` (`https://byeolileopji-ingest.byeolileopji.workers.dev`) |
+| Version | `817c1165-f0d2-410f-af2b-3e4ccff4dab5` (Observability 반영 후 재배포) |
+| Handlers | `fetch`, `scheduled` (`wrangler versions view` 확인) |
+| Cron Trigger | `*/10 * * * *` (= 10분마다), Cloudflare Dashboard 등록 확인 |
+| non-secret vars | `FIREBASE_PROJECT_ID` / `CARE_RECIPIENT_ID` / `DEVICE_ID` / `INACTIVITY_CHECK_MINUTES` / `DEVICE_OFFLINE_MINUTES` / `EMERGENCY_LOOKBACK_HOURS` / `EMERGENCY_TTL_HOURS` (7개 유지) |
+| secret | `DEVICE_KEY` (기존 그대로, 재설정 안 함) |
+| Firestore rules | `careStatus` 블록 Firebase Console 게시 완료 (**DEVELOPMENT ONLY** — 아래 참고) |
+| Observability | `wrangler.toml` `[observability] enabled = true` + `[observability.logs] invocation_logs = true` 고정 + 배포 |
+
+### 서버 threshold (Cron 이 실제로 쓰는 값)
+
+| 항목 | 값 | 비고 |
+| --- | --- | --- |
+| inactivity | **180분** | 초기 운영값 — 실사용 데이터로 튜닝 필요 (의학/안전 기준 아님) |
+| device offline | **25분** | Phase 4.1b 값 유지 |
+| emergency lookback | **12시간** | |
+| emergency TTL | **12시간** | |
+
+- **Cron cadence(10분) ≠ 상태 threshold.** Cron 은 주기적 재평가 트리거일 뿐 — offline 판정은 25분 그대로.
+- 앱 개발용 `EXPO_PUBLIC_INACTIVITY_CHECK_MINUTES=2` override 는 **server Cron 이 사용하지 않는다**
+  (Expo client 전용 — `scheduled.js` 는 `resolveServerThresholds(env)` 로 Worker env 만 읽는다).
+
+### 검증 단계
+
+1. **scheduled 강제 실행** — `npx wrangler dev --test-scheduled` 후 scheduled endpoint 직접 호출.
+   실제 로그:
+   ```
+   [care-status] scheduled compute ok recipient=dev-care-recipient status=CHECK device=offline
+                 initial=true changed=false person=- device.transition=-
+   ```
+   → `scheduled() → READ events+device → normalize → shared core compute → previous careStatus read
+   → transition detect → careStatus/{id} WRITE` 전체 Firestore E2E 가 실제로 성공.
+2. **실제 careStatus 문서 생성 확인** — Firestore `careStatus/dev-care-recipient` 문서가 위 강제
+   실행으로 생성됨.
+3. **production Cron 자동 invocation 확인 (2026-09-09)** — 사용자가 **수동 scheduled 실행을 하지
+   않은 상태**에서 Firestore `careStatus/dev-care-recipient` 의 `computedAt` 을 확인:
+   - `computedAt` = **2026-09-09 19:30:38 KST**
+   - 확인 시각 ≈ **2026-09-09 19:33 KST** (약 3분 전)
+   - → 최근 10분 Cron 경계(19:30) 직후 `computedAt` 이 **자동 갱신**되어 있었음.
+   - 문서는 강제 실행으로 이미 존재했으므로 "존재 여부" 가 아니라 **`computedAt` 이 Cron 경계
+     시각으로 갱신됐다는 점**이 근거.
+
+**결론**: `Cloudflare production Cron → scheduled() → careStatus pipeline → Firestore snapshot write`
+가 production 에서 자동 실행되고 있음을 **1회 관측으로 검증**. "밤새 10분마다 계속 정상 실행" 같은
+연속 관찰은 하지 않았다.
+
+### 아직 검증하지 않은 것
+
+| 항목 | 상태 |
+| --- | --- |
+| production Cron 자동 invocation | ✅ (1회 관측) |
+| production careStatus `computedAt` 자동 갱신 | ✅ (1회 관측) |
+| **production 실제 전환 로그 관찰** (`NORMAL→CHECK` / `online→offline` 를 사람이 로그에서 직접 확인) | ⏳ Phase 4.4 직전 validation |
+| 연속 안정성 (수 시간~수일 10분 주기 무결) | ⏳ |
+| 실패 경로 production 관찰 (`scheduled compute FAILED`) | ⏳ |
+
+- B-3 전환 semantics 는 mock/자동 테스트(스모크 23건)로 완료. production 에서 상태가 실제로 바뀌는
+  순간의 로그는 아직 사람이 직접 보지 않았다 (careStatus 는 초기 `CHECK` 로 진입 후 유지 중).
+
+### Firestore rules — 아직 DEVELOPMENT ONLY
+
+`careStatus` / `events` / `careRecipients` / `devices` 규칙은 **게시는 됐지만 여전히 개발용**
+(`read: if true`, careStatus `create/update: if true`). **production-safe security 완료 아님.**
+Phase 4.4 에서:
+- Firebase Auth 도입
+- linked guardian 관계 모델
+- Worker → Firestore service-account 인증
+- `careStatus` client write `if false` (write 는 서버만)
+- 전 컬렉션 rules narrowing
+
+### Observability
+
+`wrangler.toml` 에 `[observability] enabled = true` + `[observability.logs] invocation_logs = true`
+고정 + production 배포 완료. 용도:
+- scheduled(Cron) / fetch invocation 관찰
+- Worker `console.log` / `console.error` 로그 조회 (Dashboard > Workers > Observability > Logs, `wrangler tail`)
+- `[care-status] scheduled compute FAILED: …` 실패 관찰
+
+과도한 로그/개인정보 저장 기능이 아니다 — 진단 로그는 불투명 문서 id + 상태 enum 만 출력.
+
+---
+
+## Phase 4.4 로드맵
+
+1. **production 실제 전환 수동 검증** — `NORMAL→CHECK` / `online→offline` 를 `wrangler tail` /
+   Observability Logs 에서 직접 관찰.
+2. **FCM 푸시 인프라** — Firebase Cloud Messaging 연동.
+3. **push token 등록** — 보호자 앱 → 토큰 저장.
+4. **사람 전환 알림** — `personTransition` (`NORMAL→CHECK` 등) → 푸시.
+5. **기기 전환 알림** — `deviceTransition` (`online→offline` 등) → 푸시.
+6. **EMERGENCY 우선 알림** — `→ EMERGENCY` 최우선 푸시 + SOS ingest → 즉시 경로 (10분 Cron 안 기다림).
+7. **Firebase Auth** — 보호자 로그인.
+8. **guardian ↔ careRecipient 관계 모델** + multi-recipient production scheduling.
+9. **Firestore rules hardening** — service-account write, client write `if false`, read = linked guardian.
+10. **SOS 즉시 이벤트 경로** — ingest(`sos_triggered`) → 즉시 EMERGENCY 판정/알림.
+
+> FCM / Auth 는 이번 단계에서 구현하지 않았다.
 
 ---
 
