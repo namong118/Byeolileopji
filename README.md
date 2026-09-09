@@ -79,13 +79,17 @@ Phase 4.3  ✅  Cloudflare cron + 서버측 상태 판정 (careStatus 문서) �
               │        스모크 13건. **실제 careStatus 문서 write 검증 완료**)
               ├─ ✅  STEP B-3 — 이전 스냅샷 vs 새 스냅샷 → 상태 전환 감지 (순수 `deriveCareStatusTransition`,
               │       사람 축/기기 축 독립, reason 변화는 전환 아님, 초기 스냅샷 = baseline,
-              │       전환 중복 억제, history/FCM 없음, 스모크 23건 — 실제 production 전환 로그 관찰은 ⏳)
+              │       전환 중복 억제, history/FCM 없음, 스모크 23건 — 실제 production 전환 로그 관찰 ✅ Phase 4.4 STEP 0)
               └─ ✅  STEP B-4 — `wrangler.toml` cron(`*/10 * * * *`) + Worker `scheduled()` →
                       `runScheduledCareStatus` → B-3 pipeline (스모크 22건).
                       ✅ production Worker deploy(`817c1165…`) · `firestore.rules` 게시 ·
                       scheduled 강제 실행 Firestore E2E · **production Cron 자동 invocation 검증 완료**
                       (2026-09-09 수동 실행 없이 `computedAt` 이 10분 경계 직후 자동 갱신 관측)
-Phase 4.4  ⏳  실제 production 전환 관찰 + FCM 푸시 + Firebase Auth + Firestore rules 좁히기
+Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
+              └─ ✅  STEP 0 — production 실제 전환 검증 (실기기 ESP32-S3 + HC-SR501, 실제 Cron)
+                      임시 threshold(2/3) 1회 배포·관측·즉시 원복. 3개 Cron 경계에서
+                      CHECK→NORMAL / NORMAL→CHECK, offline→online / online→offline 를
+                      `wrangler tail` 로그 + Firestore `careStatus` 양쪽에서 관측. 아래 절 참고.
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
 
@@ -1511,12 +1515,12 @@ production 배포/검증은 아래 "Phase 4.3 Production Cron E2E 검증" 절 �
 | --- | --- |
 | production Cron 자동 invocation | ✅ (1회 관측) |
 | production careStatus `computedAt` 자동 갱신 | ✅ (1회 관측) |
-| **production 실제 전환 로그 관찰** (`NORMAL→CHECK` / `online→offline` 를 사람이 로그에서 직접 확인) | ⏳ Phase 4.4 직전 validation |
+| **production 실제 전환 로그 관찰** (`NORMAL→CHECK` / `online→offline` 를 사람이 로그에서 직접 확인) | ✅ Phase 4.4 STEP 0 (아래 절) |
 | 연속 안정성 (수 시간~수일 10분 주기 무결) | ⏳ |
 | 실패 경로 production 관찰 (`scheduled compute FAILED`) | ⏳ |
 
-- B-3 전환 semantics 는 mock/자동 테스트(스모크 23건)로 완료. production 에서 상태가 실제로 바뀌는
-  순간의 로그는 아직 사람이 직접 보지 않았다 (careStatus 는 초기 `CHECK` 로 진입 후 유지 중).
+- B-3 전환 semantics 는 mock/자동 테스트(스모크 23건)로 완료. **production 에서 상태가 실제로 바뀌는
+  순간의 로그는 Phase 4.4 STEP 0 에서 사람이 직접 관측**(3개 Cron 경계).
 
 ### Firestore rules — 아직 DEVELOPMENT ONLY
 
@@ -1541,10 +1545,79 @@ Phase 4.4 에서:
 
 ---
 
+## Phase 4.4 STEP 0 — production 실제 전환 검증
+
+> Phase 4.3 에서 미뤄둔 **"production 에서 careStatus 가 실제로 바뀌는 순간"** 을 사람이 직접
+> 관측한 기록. 실기기 ESP32-S3 + HC-SR501 PIR, 실제 production Cloudflare Cron, fake event 없음.
+> FCM / Auth / rules hardening 은 여기 포함되지 않는다 (Phase 4.4 본 단계).
+
+### 방법
+
+임시 verification threshold 를 **1회만** production 에 배포해 전환을 빠르게 유도하고 즉시 원복했다.
+
+| | 정상 (배포 전/후) | 임시 검증용 (중간 1회) |
+| --- | --- | --- |
+| `INACTIVITY_CHECK_MINUTES` | `180` | `2` |
+| `DEVICE_OFFLINE_MINUTES` | `25` | `3` |
+| `EMERGENCY_LOOKBACK_HOURS` / `EMERGENCY_TTL_HOURS` | `12` / `12` | `12` / `12` (불변) |
+| Cron | `*/10 * * * *` | `*/10 * * * *` (불변) |
+| Observability | `enabled` + `invocation_logs` | 불변 |
+
+- 임시 threshold 는 **`wrangler.toml` 편집 → `wrangler deploy` 만**, commit/push 하지 않았다.
+- Worker 소스 코드 / firmware / Cron cadence / `firestore.rules` 변경 없음.
+- 배포 버전: 임시 `f0babb0d-01f9-41cf-92e8-272e9ee22381` (2026-09-09T17:14Z) →
+  원복 `f02946b2-b95a-4327-8bce-ca028ed75de9` (2026-09-09T17:24Z, `180/25/12/12` 복귀).
+
+### 관측된 전환 (2026-09-09 UTC, 3개 Cron 경계)
+
+각 전환은 **`wrangler tail` 로그 + Firestore `careStatus/dev-care-recipient` 문서** 양쪽에서 확인.
+`computedAt` 은 매번 해당 `*/10` Cron 경계 시각과 일치.
+
+| Cron (`computedAt`) | threshold | 조건 | person | device | tail `changed` |
+| --- | --- | --- | --- | --- | --- |
+| `17:10:38Z` | `180/25` (정상) | 실기기 ESP32-S3 전원 ON → PIR 앞 실제 움직임 → heartbeat + `motion_detected` | `CHECK → NORMAL` (`inactivity → recent_activity`) | `offline → online` (`heartbeat_stale → heartbeat_fresh`) | `true` |
+| `17:20:47Z` | `2/3` (임시) | ESP32-S3 전원 OFF, 추가 motion 없음 → 3분 경과 | `NORMAL → CHECK` (`recent_activity → inactivity`) | `online → offline` (`heartbeat_fresh → heartbeat_stale`) | `true` |
+| `17:30:47Z` | `180/25` (원복) | 원복 배포 후 첫 Cron — `17:17` 마지막 활동이 180분 이내 재인정 | `CHECK → NORMAL` | `offline → online` | `true` |
+
+실제 tail 로그 (예: 첫 복구 전환):
+
+```
+"*/10 * * * *" @ 2026. 9. 10. 오전 2:10:38 - Ok
+  (log) [care-status] scheduled compute ok recipient=dev-care-recipient status=NORMAL device=online
+        initial=false changed=true person=CHECK->NORMAL device.transition=offline->online
+```
+
+```
+"*/10 * * * *" @ 2026. 9. 10. 오전 2:20:47 - Ok
+  (log) [care-status] scheduled compute ok recipient=dev-care-recipient status=CHECK device=offline
+        initial=false changed=true person=NORMAL->CHECK device.transition=online->offline
+```
+
+### 확인된 것
+
+- `Cloudflare production Cron → scheduled() → READ events+device → 공유 코어 compute → 이전 스냅샷
+  read → 전환 감지 → careStatus WRITE` 가 **상태가 실제로 바뀌는 순간에도** 정상 동작.
+- `deriveCareStatusTransition` 의 사람 축 / 기기 축 독립 전환이 production 에서 관측됨.
+- `changed=true` + `personTransition` + `deviceTransition` 이 로그로 출력되고 Firestore 문서에 반영됨
+  (전환 알림 = Phase 4.4 FCM 이 소비할 신호).
+- 임시 threshold 배포 → 원복 후 production Worker 는 `180/25/12/12` / Cron `*/10` / Observability
+  로 복귀, `DEVICE_KEY` secret 불변, non-secret vars 7개 유지.
+
+### 아직 검증하지 않은 것
+
+| 항목 | 상태 |
+| --- | --- |
+| `→ EMERGENCY` production 전환 (SOS) | ⏳ |
+| 연속 안정성 (수 시간~수일 10분 주기 무결) | ⏳ |
+| 실패 경로 production 관찰 (`scheduled compute FAILED`) | ⏳ |
+| FCM / Auth / rules hardening | ⏳ Phase 4.4 본 단계 |
+
+---
+
 ## Phase 4.4 로드맵
 
-1. **production 실제 전환 수동 검증** — `NORMAL→CHECK` / `online→offline` 를 `wrangler tail` /
-   Observability Logs 에서 직접 관찰.
+1. ✅ **production 실제 전환 수동 검증 (STEP 0)** — `CHECK↔NORMAL` / `online↔offline` 를
+   `wrangler tail` 로그 + Firestore 양쪽에서 직접 관찰 (2026-09-09, 3개 Cron 경계). 위 절 참고.
 2. **FCM 푸시 인프라** — Firebase Cloud Messaging 연동.
 3. **push token 등록** — 보호자 앱 → 토큰 저장.
 4. **사람 전환 알림** — `personTransition` (`NORMAL→CHECK` 등) → 푸시.
