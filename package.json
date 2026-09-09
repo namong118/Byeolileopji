@@ -6,8 +6,10 @@
     "@expo/vector-icons": "^15.0.2",
     "expo": "~57.0.19",
     "expo-constants": "~57.0.17",
+    "expo-device": "~57.0.1",
     "expo-font": "~57.0.3",
     "expo-linking": "~57.0.9",
+    "expo-notifications": "~57.0.17",
     "expo-router": "~57.0.18",
     "expo-status-bar": "~57.0.1",
     "firebase": "^12.18.0",
@@ -31,7 +33,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "test:smoke": "node scripts/phase25-smoke.mjs && node scripts/phase3-endpoint-smoke.mjs && node scripts/phase4-status-smoke.mjs && node scripts/phase41-devicehealth-smoke.mjs && node scripts/phase43-server-carestatus-smoke.mjs && node scripts/phase43-firestore-reader-smoke.mjs && node scripts/phase43-carestatus-writer-smoke.mjs && node scripts/phase43-transition-smoke.mjs && node scripts/phase43-scheduled-smoke.mjs && node scripts/rules-check.mjs && node scripts/firmware-check.mjs"
+    "test:smoke": "node scripts/phase25-smoke.mjs && node scripts/phase3-endpoint-smoke.mjs && node scripts/phase4-status-smoke.mjs && node scripts/phase41-devicehealth-smoke.mjs && node scripts/phase43-server-carestatus-smoke.mjs && node scripts/phase43-firestore-reader-smoke.mjs && node scripts/phase43-carestatus-writer-smoke.mjs && node scripts/phase43-transition-smoke.mjs && node scripts/phase43-scheduled-smoke.mjs && node scripts/phase44-notification-smoke.mjs && node scripts/rules-check.mjs && node scripts/firmware-check.mjs"
   },
   "private": true
 }

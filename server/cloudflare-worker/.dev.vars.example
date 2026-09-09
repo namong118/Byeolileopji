@@ -13,3 +13,10 @@ FIREBASE_PROJECT_ID="byeolileopji"
 # 디바이스 인증 공유 키 (ESP32 secrets.h 의 DEVICE_KEY 와 동일하게)
 # 임의의 긴 무작위 문자열을 직접 생성해 넣는다. 예: openssl rand -hex 24
 DEVICE_KEY="CHANGE_ME_TO_A_LONG_RANDOM_STRING"
+
+# ── Phase 4.4 STEP 1 — FCM 푸시 알림 (선택, 로컬 테스트용) ──
+# "true" 여야 scheduled() 가 전환 시 FCM 전송을 시도한다. 아래 secret 이 없으면 skip.
+FCM_NOTIFICATIONS_ENABLED="false"
+# Firebase Console > 프로젝트 설정 > 서비스 계정 > 새 비공개 키 생성 → JSON 의 값
+# FCM_CLIENT_EMAIL="firebase-adminsdk-xxxxx@byeolileopji.iam.gserviceaccount.com"
+# FCM_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"

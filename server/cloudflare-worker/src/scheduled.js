@@ -36,12 +36,17 @@
  *  성공("completed")으로 삼키지 않는다. index.js scheduled() 가 이 throw 를
  *  다시 던져 Cloudflare 가 해당 invocation 을 실패로 기록하게 한다.
  *
- * ⚠️ FCM · notification · transition history write · Firebase Auth 없음.
- *    전환 결과(`changed` / `personTransition` / `deviceTransition`)는 반환값으로만 존재한다.
+ * ── FCM 알림 (Phase 4.4 STEP 1) ────────────────────────────────────
+ *  전환(`changed && !isInitial`)이 감지되면, **스냅샷 WRITE 성공 후에** notifier.js
+ *  (`notifyCareStatusTransition`)를 호출한다. notifier 는 **절대 throw 하지 않는다**
+ *  → FCM/OAuth/토큰조회 실패가 이 Cron invocation 을 실패로 만들지 않는다.
+ *  FCM 설정(secret + `FCM_NOTIFICATIONS_ENABLED=true`)이 없으면 조용히 skip 한다.
+ *
  * ⚠️ 로그에 token / key / Authorization header 를 출력하지 않는다.
  */
 
 import { computeCompareAndWriteCareStatusSnapshot } from './careStatusWriter.js';
+import { notifyCareStatusTransition } from './notifier.js';
 
 /**
  * 서버 careStatus threshold 기본값.
@@ -155,6 +160,22 @@ export async function runScheduledCareStatus(env, { now = new Date(), logger = c
         `initial=${t.isInitial} changed=${t.changed} person=${personStr} device.transition=${deviceStr}`,
     );
 
+    // ── FCM 알림 (Phase 4.4 STEP 1) ──────────────────────────────────
+    //  스냅샷 WRITE 는 위에서 이미 성공했다 (실패면 throw 되어 여기 못 온다).
+    //  전환일 때만, 그리고 notifier 는 절대 throw 하지 않는다 → Cron 안전.
+    let notify = null;
+    if (t.changed && !t.isInitial) {
+      notify = await notifyCareStatusTransition(
+        env,
+        { careRecipientId, transition: t },
+        { now, logger },
+      );
+      logger.log(
+        `[care-status] notify recipient=${careRecipientId} decided=${notify.decided} ` +
+          `sent=${notify.sent} failed=${notify.failed} skipped=${notify.skipped ?? '-'}`,
+      );
+    }
+
     results.push({
       careRecipientId,
       status: r.snapshot.person.status,
@@ -163,6 +184,7 @@ export async function runScheduledCareStatus(env, { now = new Date(), logger = c
       changed: t.changed,
       personTransition: t.personTransition,
       deviceTransition: t.deviceTransition,
+      notify,
     });
   }
 

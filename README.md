@@ -86,10 +86,16 @@ Phase 4.3  ✅  Cloudflare cron + 서버측 상태 판정 (careStatus 문서) �
                       scheduled 강제 실행 Firestore E2E · **production Cron 자동 invocation 검증 완료**
                       (2026-09-09 수동 실행 없이 `computedAt` 이 10분 경계 직후 자동 갱신 관측)
 Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
-              └─ ✅  STEP 0 — production 실제 전환 검증 (실기기 ESP32-S3 + HC-SR501, 실제 Cron)
-                      임시 threshold(2/3) 1회 배포·관측·즉시 원복. 3개 Cron 경계에서
-                      CHECK→NORMAL / NORMAL→CHECK, offline→online / online→offline 를
-                      `wrangler tail` 로그 + Firestore `careStatus` 양쪽에서 관측. 아래 절 참고.
+              ├─ ✅  STEP 0 — production 실제 전환 검증 (실기기 ESP32-S3 + HC-SR501, 실제 Cron)
+              │       임시 threshold(2/3) 1회 배포·관측·즉시 원복. 3개 Cron 경계에서
+              │       CHECK→NORMAL / NORMAL→CHECK, offline→online / online→offline 를
+              │       `wrangler tail` 로그 + Firestore `careStatus` 양쪽에서 관측. 아래 절 참고.
+              └─ ✅  STEP 1 — FCM 전환 알림 파이프라인 (구조 + 테스트, **실기기 수신 미검증**)
+                      전환 → `deriveTransitionNotifications`(순수 정책, 0/1개) → guardian
+                      pushToken 조회 → FCM HTTP v1 sender(Web Crypto RS256 JWT) → 전송.
+                      **snapshot WRITE 성공 후에만**, notifier 는 **절대 throw 안 함**(Cron 안전).
+                      kill-switch `FCM_NOTIFICATIONS_ENABLED=false` — service account secret +
+                      실기기 수신 검증 전까지 production 알림 OFF. 스모크 50건. 아래 절 참고.
 Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
 ```
 
@@ -292,6 +298,22 @@ PoC 단계라 구조는 단순하게 유지한다.
 Phase 3 에서 ESP32 는 이벤트에 `deviceId` 만 실어 보내고,
 서버가 이 문서를 조회해 `careRecipientId` / `location` 을 결정한다.
 
+### `pushTokens/{tokenId}` — Phase 4.4 STEP 1
+
+보호자 기기의 **native FCM registration token**. Worker `notifier.js` 가 전환 시 조회해
+FCM HTTP v1 으로 푸시를 보낸다.
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| `token` | string | FCM device registration token (`getDevicePushTokenAsync`, Expo Push Token 아님) |
+| `platform` | string | `android` `ios` `web` `unknown` |
+| `careRecipientId` | string | 이 보호자가 보는 대상자 (현재 `dev-care-recipient` 고정) |
+| `enabled` | boolean | `false` = Worker 가 invalid token 으로 비활성화 |
+| `createdAt` / `updatedAt` | Timestamp | `serverTimestamp()` |
+
+> 문서 id = `{platform}-{FNV1a(token) hex}` — 같은 기기 재등록 시 문서가 안 쌓인다.
+> Firebase Auth 도입 후 `guardianUid` 기반 id + 관계 검증으로 대체한다.
+
 ---
 
 ## Firestore Rules
@@ -302,9 +324,13 @@ Phase 3 에서 ESP32 는 이벤트에 `deviceId` 만 실어 보내고,
 
 - 전체 DB 와일드카드(`match /{document=**}`)는 쓰지 않는다.
 - `events`: `read` + `create` 허용, `update`/`delete` 금지.
-- `careRecipients` / `devices`: `read` 만 허용 (앱은 쓰지 않음).
+- `careRecipients`: `read` 만. `devices`: `read` + `update`(`lastEventAt`/`lastHeartbeatAt` 만).
+- `careStatus`: `read` + `create`/`update`(서버 계산 결과). `delete` 금지.
+- `pushTokens` (Phase 4.4 STEP 1): `read`(Worker 조회) + `create`(앱 등록) +
+  `update`(`token`/`platform`/`enabled`/`updatedAt` 만 — `careRecipientId` 재지정 불가).
+  `delete` 금지. **아직 Firebase Console 에 게시 안 함.**
 
-Phase 4 에서 좁힌다:
+Phase 4.4 Auth 에서 좁힌다:
 
 ```
 allow read:  if isLinkedGuardian(resource.data.careRecipientId);
@@ -353,6 +379,10 @@ src/
       firestoreEventRepository.ts  Firestore 구현 (list/append/subscribe)
     eventViews.ts            deriveEventViews (순수 파생 로직)
     eventService.ts          도메인 로직 + 저장소 선택(팩토리) + EVENT_DATA_SOURCE
+    careStatusTransition.ts  deriveCareStatusTransition (순수, B-3)
+    transitionNotification.ts deriveTransitionNotifications (순수 알림 정책, 4.4 STEP 1)
+    pushTokenDoc.ts          buildPushTokenDoc / pushTokenDocId (순수, 4.4 STEP 1)
+    pushRegistration.ts      registerForCareStatusPush (native FCM 토큰 → pushTokens, 4.4 STEP 1)
   stores/careStore.ts        UI 반응형 상태 (loading / error / dataSource / realtime)
   mock/                      보호대상 · seed 이벤트 · 시뮬레이션 버튼 정의
   utils/                     시간 포맷, 이벤트 → 한국어 문구, 홈 요약 계산
@@ -361,11 +391,18 @@ firebase.json                Firestore 배포 설정
 firestore.rules              보안 규칙 (DEVELOPMENT ONLY)
 firestore.indexes.json       복합 인덱스 정의
 
-server/cloudflare-worker/    디바이스 이벤트 ingest endpoint (Phase 3)
+server/cloudflare-worker/    디바이스 이벤트 ingest endpoint (Phase 3) + Cron careStatus (4.3) + FCM (4.4)
   src/validate.js            요청/디바이스 검증 (순수)
   src/buildEvent.js          events 문서 생성 로직 (순수, 서버 timestamp)
   src/firestore.js           Firestore REST 헬퍼 (인증 없음 — DEVELOPMENT ONLY)
-  src/index.js               Worker fetch 핸들러
+  src/firestoreRead.js       Firestore READ 전용 (events 쿼리 / device point read)
+  src/careStatusReader.js    READ → normalize → 공유 코어 compute (4.3 B-1)
+  src/careStatusWriter.js    careStatus 스냅샷 WRITE + 이전 비교 (4.3 B-2/B-3)
+  src/scheduled.js           Cron 오케스트레이션 + 전환 시 notify 호출 (4.3 B-4 / 4.4 STEP 1)
+  src/fcmClient.js           FCM HTTP v1: RS256 JWT(Web Crypto) → OAuth2 → messages:send (4.4 STEP 1)
+  src/pushTokenStore.js      pushTokens 조회 / invalid token 비활성화 (4.4 STEP 1)
+  src/notifier.js            전환 → 알림 오케스트레이션 (절대 throw 안 함) (4.4 STEP 1)
+  src/index.js               Worker fetch + scheduled 핸들러
   wrangler.toml / README.md
 
 firmware/esp32-pir/          ESP32-S3 + HC-SR501 PIR 펌웨어 (Phase 3)
@@ -1614,12 +1651,178 @@ Phase 4.4 에서:
 
 ---
 
+## Phase 4.4 STEP 1 — FCM 전환 알림 파이프라인
+
+> 서버가 실제 careStatus 전환을 감지했을 때 **보호자 스마트폰으로 푸시를 보낼 수 있는
+> 구조**. 이번 STEP 은 **인프라 + 알림 결정 + 토큰 모델 + 테스트 가능한 서버 구조**까지.
+> 실제 credential 발급 · Firebase Console 설정 · production 배포 · rules 게시 · 실기기
+> 수신 검증은 **하지 않았다** (아래 "사용자가 해야 할 작업" 참고).
+
+### 파이프라인
+
+```
+careStatus 전환 (B-3 deriveCareStatusTransition — 유일한 source of truth)
+     │  changed === true && isInitial === false
+     ▼
+scheduled.js  ── snapshot WRITE 성공 후에만 ──▶  notifyCareStatusTransition()   ← notifier.js
+     │
+     ├─ deriveTransitionNotifications()   순수 정책 → 알림 0개 또는 1개
+     ├─ resolveFcmConfig()                kill-switch + secret 존재 확인
+     ├─ queryGuardianPushTokens()         pushTokens where careRecipientId == X (Firestore REST)
+     ├─ createGoogleAccessToken()         service-account RS256 JWT → OAuth2 (Web Crypto)
+     ├─ sendFcmMessage() × 토큰            POST fcm.googleapis.com/v1/…/messages:send
+     └─ disablePushToken()                UNREGISTERED/404 → enabled=false (best-effort)
+```
+
+### Expo Push 가 아니라 native FCM HTTP v1 을 쓰는 이유
+
+이 프로젝트는 Cloudflare Worker 가 FCM 을 **직접** 호출한다. 따라서 Expo Push Service
+(Expo Push Token)가 아니라 **native FCM device token** 이 필요하다
+(`Notifications.getDevicePushTokenAsync()`, `type: 'android'`). legacy FCM server key
+방식은 폐기됐으므로 **HTTP v1 + service account OAuth2 Bearer** 를 쓴다. Worker 에는
+Node crypto 가 없어 JWT 서명은 **Web Crypto (`crypto.subtle`)** 로 한다.
+
+### 알림 정책 (`deriveTransitionNotifications` — 순수, 전환당 0/1개)
+
+| 전환 | kind | priority | 문구 (title) |
+| --- | --- | --- | --- |
+| `* → EMERGENCY` (사람) | `person_emergency` | high | 긴급 확인이 필요해요 |
+| `NORMAL/EMERGENCY → CHECK` | `person_check` | high | 최근 활동이 확인되지 않았어요 |
+| `CHECK/EMERGENCY → NORMAL` | `person_recovery` | normal | 활동이 다시 확인됐어요 |
+| `online → offline` (기기) | `device_offline` | high | 생활 센서를 확인해 주세요 |
+| `offline → online` (기기) | `device_recovery` | normal | 생활 센서가 다시 연결됐어요 |
+| 사람 CHECK 진입 **+** 기기 offline 진입 동시 | `person_check_device_offline` | high | 안부와 센서 상태를 확인해 주세요 |
+
+- **의학적 진단 문구 금지** — "쓰러졌습니다 / 낙상 / 위험합니다 / 생명이 위험" 처럼 현재
+  센서로 확정 불가한 표현을 쓰지 않는다. 확인 **권유** 톤만.
+- **`* → unknown`(기기 데이터 부재)** 은 알림 아님.
+
+### 명시적 정책 결정
+
+| 상황 | 정책 | 이유 |
+| --- | --- | --- |
+| `isInitial === true` (첫 스냅샷) | **알림 없음** — 최초가 CHECK/EMERGENCY/offline 이어도 | B-3 baseline seed 규칙 그대로. "이전 없음 → X" 를 알림으로 만들지 않는다 |
+| reason-only 변화 (`CHECK/inactivity → CHECK/no_data` 등) | **알림 없음** | 전환 identity = `status` / `deviceHealth` 값만 (B-3) |
+| 같은 상태 유지 (10분 Cron 반복) | **알림 없음** | 전환 아님 → 별도 시간 기반 중복 억제 불필요 |
+| 복구 후 재악화 (`NORMAL → CHECK → NORMAL → CHECK`) | 마지막 `→ CHECK` 는 **새 전환 → 다시 알림** | B-3 detector 가 판단 |
+| 두 축 동시 전환 | **알림 1개** (결합 문구 또는 우선순위로 택1) | 보호자가 알림 2개 받지 않게. "우연히 2개" 를 코드 구조상 불가능하게 (`length <= 1` 테스트로 고정) |
+| 우선순위 | emergency > person CHECK > device offline > person 복구 > device 복구 | 확인이 시급한 쪽 우선 |
+
+### snapshot WRITE-before-push 보장
+
+`computeCompareAndWriteCareStatusSnapshot()` (B-3) 는 스냅샷 WRITE 실패 시 **throw** 한다.
+`scheduled.js` 는 그 함수가 정상 반환한 **뒤에만** `notifyCareStatusTransition()` 을 호출한다.
+→ WRITE 실패 시 notify 는 아예 도달하지 않는다. (스모크 F5 로 고정.)
+
+### FCM 실패 정책 — Cron 을 무효화하지 않는다
+
+`notifyCareStatusTransition()` 은 **절대 throw 하지 않는다.** OAuth/토큰조회/전송 어디서
+실패해도:
+- careStatus 문서를 되돌리지 않는다 (애초에 손대지 않는다)
+- transition 결과를 무효화하지 않는다
+- Cron invocation 을 실패로 만들지 않는다
+- `[notify] send failed …` 로그만 남긴다 (**secret / token 값 미출력**)
+
+**알려진 갭 (문서화):** delivery queue / 재시도가 없다. careStatus 문서는 이미 갱신됐으므로,
+한 Cron tick 에서 전송 실패한 알림은 다음 tick 에서 재발생하지 않는다 → **유실**. 그래서
+notify 실패로 Cron 을 throw 시켜도 알림은 되살아나지 않는다 (그래서 throw 하지 않는다).
+재시도 큐는 다음 STEP TODO.
+
+### invalid / expired token
+
+FCM 응답이 `UNREGISTERED` / `404` / `INVALID_ARGUMENT` → `pushTokens/{id}.enabled = false`
+(문서 삭제 아님). 완전한 lifecycle (재확인/재등록/GC)은 Auth 단계 TODO. 토큰 값은 어떤
+로그에도 넣지 않는다 (문서 id + status + code 만).
+
+### notification payload (data)
+
+```
+{ type: "CARE_STATUS_TRANSITION", kind, careRecipientId,
+  personFrom?, personTo?, deviceFrom?, deviceTo? }
+```
+전부 문자열 (FCM v1 data 는 string map). 전환 안 된 축의 from/to 는 **넣지 않는다**.
+부모님의 구체적 생활 기록 / 센서 raw 값을 넣지 않는다.
+
+### secret 구조 (전부 wrangler secret — repo 에 없음)
+
+| 이름 | 용도 | 등록 |
+| --- | --- | --- |
+| `FCM_NOTIFICATIONS_ENABLED` | kill-switch (`wrangler.toml` var, **비밀 아님**, 기본 `"false"`) | toml |
+| `FCM_CLIENT_EMAIL` | service account `client_email` | `wrangler secret put` |
+| `FCM_PRIVATE_KEY` | service account `private_key` (PKCS#8 PEM) | `wrangler secret put` |
+
+`FCM_NOTIFICATIONS_ENABLED != "true"` 이거나 secret 이 없으면 → notifier 가 조용히 skip.
+
+### 추가/변경 파일
+
+**서버 (Cloudflare Worker):**
+- `src/fcmClient.js` — FCM HTTP v1: `resolveFcmConfig` / `createGoogleAccessToken`(Web Crypto RS256) / `sendFcmMessage` / `buildFcmMessage` / `FcmError`
+- `src/pushTokenStore.js` — `queryGuardianPushTokens` / `disablePushToken` (Firestore REST)
+- `src/notifier.js` — `notifyCareStatusTransition` (오케스트레이션, 절대 throw 안 함)
+- `src/scheduled.js` — 전환 시 (`changed && !isInitial`) notify 호출 추가. B-4 로직 무변경
+- `wrangler.toml` — `FCM_NOTIFICATIONS_ENABLED = "false"` + secret 등록 안내 주석
+- `.dev.vars.example` — 로컬 FCM 테스트 변수 예시
+
+**공유/앱:**
+- `src/services/transitionNotification.ts` — `deriveTransitionNotifications` (순수 정책)
+- `src/services/pushTokenDoc.ts` — `buildPushTokenDoc` / `pushTokenDocId` (순수)
+- `src/services/pushRegistration.ts` — `registerForCareStatusPush` (native 토큰 → Firestore)
+- `app/_layout.tsx` — 부팅 시 `registerForCareStatusPush()` fire-and-forget
+- `app.json` — `expo-notifications` 플러그인
+- `package.json` — `expo-notifications ~57.0.17`, `expo-device ~57.0.1`
+
+**rules / 테스트:**
+- `firestore.rules` — `pushTokens` 블록 (**DEVELOPMENT ONLY**, 게시 안 함)
+- `scripts/rules-check.mjs` — pushTokens 정적 검사
+- `scripts/phase44-notification-smoke.mjs` — **50건** (정책 / FCM sender / 토큰스토어 / notifier / scheduled 통합)
+
+### 검증
+
+| | 결과 |
+| --- | --- |
+| `npm run typecheck` | ✅ |
+| `npm run lint` | ✅ |
+| `npm run test:smoke` | ✅ **264건** (기존 212 + phase44 50 + rules-check +2) |
+| `node scripts/firmware-check.mjs` | ✅ 12/12 (무변경) |
+| `npx expo export --platform android` | ✅ |
+| `wrangler deploy --dry-run` | ✅ (46.86 KiB, `FCM_NOTIFICATIONS_ENABLED="false"`, threshold 180/25/12/12 무변경, Cron `*/10` 무변경) |
+| **실기기 FCM 수신 (production E2E)** | ⏳ **미검증** — 아래 사용자 작업 필요 |
+
+- **production Worker deploy 안 함.** 최종 production 은 여전히 STEP 0 의 `f02946b2…`.
+- **`firestore.rules` 게시 안 함.** pushTokens 블록은 repo 에만 있다.
+- **credential 발급 / secret 등록 안 함.**
+
+### 사용자가 해야 할 작업 (실기기 알림까지)
+
+1. **Firebase Console** — 프로젝트 `byeolileopji` 에 **Android 앱 등록** (패키지명, 예: `com.byeolileopji.app`).
+2. **`google-services.json` 다운로드** → repo 루트에 두고 `.gitignore` 에 추가.
+   `app.json` `android.googleServicesFile: "./google-services.json"` 추가.
+3. **service account 키** — Firebase Console > 프로젝트 설정 > 서비스 계정 > **새 비공개 키 생성** → JSON 다운로드.
+4. **wrangler secret 등록** (worker 디렉터리에서):
+   ```
+   npx wrangler secret put FCM_CLIENT_EMAIL     # JSON 의 client_email
+   npx wrangler secret put FCM_PRIVATE_KEY      # JSON 의 private_key 전체
+   ```
+5. **`firestore.rules` 게시** — Firebase Console 규칙 탭에 현재 `firestore.rules` 붙여넣고 게시 (pushTokens 블록 포함).
+6. **development build** — Expo Go 는 안 된다. `npx expo run:android` 또는 EAS build 로 dev build 설치.
+7. 앱 실행 → 알림 권한 허용 → `pushTokens/{id}` 문서 생성 확인 (Firestore Console).
+8. **`FCM_NOTIFICATIONS_ENABLED = "true"`** 로 바꾸고 `npx wrangler deploy` (사용자가 직접 — classifier 가 자동 배포 차단).
+9. 활동 방치 → 다음 `*/10` Cron 에서 `NORMAL→CHECK` 전환 → 휴대폰 알림 수신 확인 →
+   이 때 비로소 **FCM production E2E = 완료**.
+
+> 위 1~9 전까지 **FCM production E2E = pending**. 자동 스모크 통과만으로 "완료" 라고 하지 않는다.
+
+---
+
 ## Phase 4.4 로드맵
 
 1. ✅ **production 실제 전환 수동 검증 (STEP 0)** — `CHECK↔NORMAL` / `online↔offline` 를
    `wrangler tail` 로그 + Firestore 양쪽에서 직접 관찰 (2026-09-09, 3개 Cron 경계). 위 절 참고.
-2. **FCM 푸시 인프라** — Firebase Cloud Messaging 연동.
-3. **push token 등록** — 보호자 앱 → 토큰 저장.
+2. 🟡 **FCM 푸시 인프라 + 전환 알림 결정 (STEP 1)** — FCM HTTP v1 sender(Web Crypto) ·
+   순수 알림 정책 · pushTokens 모델 · scheduled 통합 · 스모크 50건 **완료**. 실기기 수신 ·
+   credential · production 배포 · rules 게시 ⏳ (위 "STEP 1" 절 "사용자가 해야 할 작업").
+3. 🟡 **push token 등록 (STEP 1)** — `registerForCareStatusPush` (native FCM 토큰 → `pushTokens/{id}`)
+   구현 완료. google-services.json + development build 필요 → 실기기 미검증.
 4. **사람 전환 알림** — `personTransition` (`NORMAL→CHECK` 등) → 푸시.
 5. **기기 전환 알림** — `deviceTransition` (`online→offline` 등) → 푸시.
 6. **EMERGENCY 우선 알림** — `→ EMERGENCY` 최우선 푸시 + SOS ingest → 즉시 경로 (10분 Cron 안 기다림).

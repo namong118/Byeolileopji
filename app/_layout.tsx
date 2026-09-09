@@ -6,6 +6,7 @@ import { Stack } from 'expo-router';
 
 import { colors } from '../src/constants/theme';
 import { useCareStore } from '../src/stores/careStore';
+import { registerForCareStatusPush } from '../src/services/pushRegistration';
 
 export default function RootLayout() {
   const init = useCareStore((s) => s.init);
@@ -13,6 +14,10 @@ export default function RootLayout() {
 
   useEffect(() => {
     void init();
+    // Phase 4.4 STEP 1 — 보호자 기기 FCM 토큰 등록 (fire-and-forget).
+    //   실기기 + development build + google-services.json 이 있을 때만 성공한다.
+    //   그 외에는 조용히 실패한다 (앱 실행을 막지 않는다).
+    void registerForCareStatusPush();
     return () => teardown();
   }, [init, teardown]);
 

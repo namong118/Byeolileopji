@@ -44,8 +44,20 @@ check('devices update 는 lastEventAt / lastHeartbeatAt 만 허용 (hasOnly)', (
   assert.ok(/allow create, delete: if false/.test(block));
 });
 
-check('devices 핵심 레지스트리 필드는 어떤 allow 목록에도 없다', () => {
-  // hasOnly([...]) 안에 나온 필드만 클라이언트가 바꿀 수 있다
+check('devices 블록의 update 허용 필드는 lastEventAt / lastHeartbeatAt 뿐', () => {
+  const m = src.match(/match \/devices\/\{deviceId\}\s*{([\s\S]*?)\n {4}}/);
+  assert.ok(m, 'devices 블록을 찾을 수 없음');
+  const allowed = new Set();
+  for (const h of m[1].matchAll(/hasOnly\(\[([^\]]*)\]\)/g)) {
+    for (const f of h[1].split(',')) {
+      const t = f.trim().replace(/^'|'$/g, '');
+      if (t) allowed.add(t);
+    }
+  }
+  assert.deepEqual([...allowed].sort(), ['lastEventAt', 'lastHeartbeatAt']);
+});
+
+check('디바이스 핵심 레지스트리 필드는 어떤 hasOnly 목록에도 없다', () => {
   const allowedFields = new Set();
   for (const m of src.matchAll(/hasOnly\(\[([^\]]*)\]\)/g)) {
     for (const f of m[1].split(',')) {
@@ -53,13 +65,13 @@ check('devices 핵심 레지스트리 필드는 어떤 allow 목록에도 없다
       if (t) allowedFields.add(t);
     }
   }
-  for (const core of ['careRecipientId', 'enabled', 'type', 'location', 'name']) {
+  // careRecipientId 는 devices / pushTokens 어느 쪽에서도 클라이언트가 못 바꾼다
+  for (const core of ['careRecipientId', 'type', 'location', 'name', 'createdAt']) {
     assert.ok(
       !allowedFields.has(core),
-      `핵심 필드 ${core} 가 클라이언트 변경 허용 목록에 있음`,
+      `필드 ${core} 가 클라이언트 변경 허용 목록에 있음`,
     );
   }
-  assert.deepEqual([...allowedFields].sort(), ['lastEventAt', 'lastHeartbeatAt']);
 });
 
 check('careRecipients / events update·delete 는 여전히 잠겨 있다', () => {
@@ -76,6 +88,18 @@ check('careStatus 는 파생 데이터 전용 컬렉션 (Phase 4.3 B-2, delete �
   assert.ok(/allow delete: if false/.test(block), 'careStatus delete 는 잠겨 있어야 함');
   // careStatus 는 필드 화이트리스트(hasOnly)를 쓰지 않는다 — 서버가 전체 문서를 replace 한다.
   assert.ok(!/hasOnly/.test(block), 'careStatus 블록에 예상치 못한 hasOnly');
+});
+
+check('pushTokens 블록 (Phase 4.4 STEP 1) — create 허용, update 는 hasOnly, delete 잠금', () => {
+  const m = src.match(/match \/pushTokens\/\{tokenId\}\s*{([\s\S]*?)\n {4}}/);
+  assert.ok(m, 'pushTokens 블록을 찾을 수 없음');
+  const block = m[1];
+  assert.ok(/allow read: if true/.test(block), 'pushTokens read 허용 없음 (Worker 조회)');
+  assert.ok(/allow create: if true/.test(block), 'pushTokens create 허용 없음 (앱 등록)');
+  assert.ok(/allow update: if/.test(block) && /hasOnly\(/.test(block), 'pushTokens update 는 hasOnly 여야 함');
+  assert.ok(/'token'/.test(block) && /'enabled'/.test(block), 'token / enabled 갱신 허용 없음');
+  assert.ok(!/'careRecipientId'/.test(block), 'careRecipientId 는 갱신 허용 목록에 없어야 함');
+  assert.ok(/allow delete: if false/.test(block), 'pushTokens delete 는 잠겨 있어야 함');
 });
 
 check('DEVELOPMENT ONLY 표기가 있다', () => {

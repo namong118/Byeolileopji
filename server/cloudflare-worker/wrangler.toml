@@ -24,6 +24,13 @@ DEVICE_OFFLINE_MINUTES = "25"
 EMERGENCY_LOOKBACK_HOURS = "12"
 EMERGENCY_TTL_HOURS = "12"
 
+# ── Phase 4.4 STEP 1 — FCM 푸시 알림 kill-switch ──
+#   비밀 아님. "true" 여야 scheduled() 가 전환 시 FCM 전송을 **시도**한다.
+#   기본 "false" — service account secret 을 등록하고 실기기 수신을 검증하기 전까지
+#   production 에서 알림을 켜지 않는다 (단계적 롤아웃).
+#   secret(아래)이 없으면 "true" 여도 조용히 skip 한다.
+FCM_NOTIFICATIONS_ENABLED = "false"
+
 # ── Cron Trigger — 10분마다 scheduled() 실행 (Phase 4.3 STEP B-4) ──
 # Cron cadence ≠ 상태 threshold. Cron 은 "주기적 재평가" 트리거일 뿐이다.
 [triggers]
@@ -31,6 +38,14 @@ crons = ["*/10 * * * *"]
 
 # 비밀은 vars 에 두지 않는다. 아래 명령으로 등록한다:
 #   npx wrangler secret put DEVICE_KEY
+#
+# ── Phase 4.4 STEP 1 — FCM service account (secret, 아직 미등록) ──
+#   FCM HTTP v1 은 service account 로 OAuth2 access token 을 발급받아 쓴다.
+#   Firebase Console > 프로젝트 설정 > 서비스 계정 > 새 비공개 키 생성 → JSON 다운로드.
+#   그 JSON 의 값으로 아래 2개를 등록한다 (JSON 파일 자체는 repo 에 넣지 않는다):
+#     npx wrangler secret put FCM_CLIENT_EMAIL     # JSON 의 client_email
+#     npx wrangler secret put FCM_PRIVATE_KEY      # JSON 의 private_key (PKCS#8 PEM 전체, 헤더/푸터 포함)
+#   등록 후 FCM_NOTIFICATIONS_ENABLED 를 "true" 로 바꿔 재배포하면 알림이 켜진다.
 #
 # 로컬 개발(`wrangler dev`)에서는 .dev.vars 파일을 사용한다 (.gitignore 처리됨).
 
