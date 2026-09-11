@@ -884,14 +884,14 @@ check('G4. pushTokenDocId — 결정적, 같은 토큰 → 같은 id, 다른 토
 
 // ── wrangler.toml / .dev.vars.example 정적 확인 ──────────────────────
 
-check('H1. wrangler.toml — FCM_NOTIFICATIONS_ENABLED="false" (기본 꺼짐), secret 값 없음', () => {
+check('H1. wrangler.toml — FCM_NOTIFICATIONS_ENABLED="true" (실기기 E2E 검증 완료, 운영 확정), secret 값 없음', () => {
   const raw = fs.readFileSync(
     new URL('../server/cloudflare-worker/wrangler.toml', import.meta.url),
     'utf8',
   );
   // 주석(#...) 을 제거해 실제 설정 라인만 검사한다.
   const toml = raw.replace(/#[^\n]*/g, '');
-  assert.match(toml, /FCM_NOTIFICATIONS_ENABLED\s*=\s*"false"/);
+  assert.match(toml, /FCM_NOTIFICATIONS_ENABLED\s*=\s*"true"/);
   assert.doesNotMatch(toml, /FCM_PRIVATE_KEY\s*=/, 'private key 가 toml 설정에 있으면 안 됨');
   assert.doesNotMatch(toml, /FCM_CLIENT_EMAIL\s*=/, 'client_email 이 toml 설정에 있으면 안 됨');
   assert.doesNotMatch(toml, /BEGIN [A-Z ]*PRIVATE KEY/);

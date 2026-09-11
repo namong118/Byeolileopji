@@ -29,7 +29,7 @@ EMERGENCY_TTL_HOURS = "12"
 #   기본 "false" — service account secret 을 등록하고 실기기 수신을 검증하기 전까지
 #   production 에서 알림을 켜지 않는다 (단계적 롤아웃).
 #   secret(아래)이 없으면 "true" 여도 조용히 skip 한다.
-FCM_NOTIFICATIONS_ENABLED = "false"
+FCM_NOTIFICATIONS_ENABLED = "true"
 
 # ── Cron Trigger — 10분마다 scheduled() 실행 (Phase 4.3 STEP B-4) ──
 # Cron cadence ≠ 상태 threshold. Cron 은 "주기적 재평가" 트리거일 뿐이다.
