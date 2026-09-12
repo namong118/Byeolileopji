@@ -396,7 +396,18 @@ function mockFetch(router) {
       : opts.body;
     calls.push({ u, method, body });
     const res = await router({ u, method, body, opts });
-    return res ?? new Response(`UNEXPECTED ${method} ${u}`, { status: 599 });
+    if (res) return res;
+    // Phase 5.3-A — router 가 처리하지 않은 OAuth 토큰 요청은 기본적으로 성공시킨다.
+    // Firestore REST 헬퍼가 이제 매 호출 전 OAuth 토큰을 먼저 발급받기 때문에, oauth
+    // 자체를 테스트 대상으로 삼지 않는 라우터(D1/D3 등)가 일일이 처리하지 않아도 된다.
+    // (oauth 자체를 실패시키고 싶은 라우터는 이 URL 을 직접 처리해 null 이 아닌 값을 반환하면 된다.)
+    if (u.includes('oauth2.googleapis.com/token')) {
+      return new Response(JSON.stringify({ access_token: 'ya29.OK', expires_in: 3599 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(`UNEXPECTED ${method} ${u}`, { status: 599 });
   };
   return {
     calls,
@@ -406,10 +417,14 @@ function mockFetch(router) {
   };
 }
 
+// Phase 5.3-A — Firestore REST 도 이제 OAuth 인증이 필요하다. 위에서 이미 생성한
+// FCM 용 실제 RSA 키(TEST_PRIV/FCM_CONFIG, C4 테스트 부근)를 그대로 재사용한다.
 const ENV = {
   FIREBASE_PROJECT_ID: 'byeolileopji',
   CARE_RECIPIENT_ID: CARE_ID,
   DEVICE_ID,
+  FCM_CLIENT_EMAIL: FCM_CONFIG.clientEmail,
+  FCM_PRIVATE_KEY: TEST_PRIV,
 };
 
 function pushTokenRows(rows) {
@@ -458,7 +473,15 @@ check('D1. queryGuardianPushTokens — careRecipientId fieldFilter + enabled=fal
 });
 
 check('D2. queryGuardianPushTokens — runQuery 500 → FirestoreError', async () => {
-  const m = mockFetch(async () => new Response('{"error":{}}', { status: 500 }));
+  const m = mockFetch(async ({ u }) => {
+    // OAuth 토큰 발급은 성공시키고, Firestore runQuery 자체만 실패시킨다 (Phase 5.3-A).
+    if (u.includes('oauth2.googleapis.com/token')) {
+      return new Response(JSON.stringify({ access_token: 'ya29.OK', expires_in: 3599 }), {
+        status: 200,
+      });
+    }
+    return new Response('{"error":{}}', { status: 500 });
+  });
   try {
     await assert.rejects(() => queryGuardianPushTokens(ENV, CARE_ID), (e) => e.status === 500);
   } finally {

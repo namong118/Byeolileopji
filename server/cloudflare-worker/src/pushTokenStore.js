@@ -10,8 +10,9 @@
  *  guardianUid / 관계 검증 / 토큰 회전 정책 / TTL 은 Phase 4.4 Auth 단계로 미룬다.
  *
  * ── 인증 ───────────────────────────────────────────────────────────
- *  아직 **인증 없이** read/write 한다 (`firestore.rules` pushTokens = DEVELOPMENT ONLY).
- *  Phase 4.4 Auth 이후: read = 서버(service-account)만, write = 토큰 소유 guardian.
+ *  Phase 5 STEP 5.3-A — service-account OAuth2 Bearer 로 read/write 한다
+ *  (firestoreAuth.js, FCM 과 동일 secret 재사용). 조회는 서버(Worker)만 한다 —
+ *  앱은 자기 토큰 문서만 client SDK 로 create/update 한다(pushRegistration.ts).
  *
  * ── 토큰 값 취급 ───────────────────────────────────────────────────
  *  registration token 을 **로그에 출력하지 않는다**. 문서 id 와 개수만 로깅 대상.
@@ -22,6 +23,7 @@
  */
 
 import { FirestoreError, fromFirestoreFields, toFirestoreFields } from './firestore.js';
+import { getFirestoreAccessToken } from './firestoreAuth.js';
 
 const HOST = 'https://firestore.googleapis.com/v1';
 
@@ -33,8 +35,9 @@ function base(env) {
   return `${HOST}/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 }
 
-function keyParam(env) {
-  return env.FIREBASE_API_KEY ? `?key=${encodeURIComponent(env.FIREBASE_API_KEY)}` : '';
+async function authHeaders(env) {
+  const token = await getFirestoreAccessToken(env);
+  return { authorization: `Bearer ${token}` };
 }
 
 async function safeText(res) {
@@ -55,7 +58,7 @@ async function safeText(res) {
 export async function queryGuardianPushTokens(env, careRecipientId) {
   if (!careRecipientId) throw new Error('queryGuardianPushTokens: careRecipientId required');
 
-  const url = `${base(env)}:runQuery${keyParam(env)}`;
+  const url = `${base(env)}:runQuery`;
   const structuredQuery = {
     from: [{ collectionId: PUSH_TOKENS_COLLECTION }],
     where: {
@@ -70,7 +73,7 @@ export async function queryGuardianPushTokens(env, careRecipientId) {
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(await authHeaders(env)) },
     body: JSON.stringify({ structuredQuery }),
   });
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));
@@ -107,12 +110,11 @@ export async function disablePushToken(env, tokenId) {
   const fields = { enabled: false, updatedAt: new Date() };
   const params = new URLSearchParams();
   for (const key of Object.keys(fields)) params.append('updateMask.fieldPaths', key);
-  if (env.FIREBASE_API_KEY) params.set('key', env.FIREBASE_API_KEY);
 
   const url = `${base(env)}/${PUSH_TOKENS_COLLECTION}/${encodeURIComponent(tokenId)}?${params}`;
   const res = await fetch(url, {
     method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(await authHeaders(env)) },
     body: JSON.stringify({ fields: toFirestoreFields(fields) }),
   });
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));

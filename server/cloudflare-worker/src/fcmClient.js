@@ -122,15 +122,20 @@ export function resolveFcmConfig(env = {}) {
 /**
  * service account 로 Google OAuth2 access token 발급 (JWT bearer grant).
  *
- * @param config  resolveFcmConfig() 의 configured 결과
+ * Phase 5.3-A — Firestore REST 인증(firestoreAuth.js)도 이 함수를 재사용한다.
+ * FCM 호출부(notifier.js)는 scope 를 넘기지 않으므로 기본값(FCM_SCOPE)으로 기존
+ * 동작이 완전히 유지된다. Firestore 쪽은 scope: DATASTORE_SCOPE 를 명시해서 부른다.
+ *
+ * @param config  resolveFcmConfig() (또는 동일 형태의) configured 결과
  * @param opts.now        Date — JWT iat/exp 기준
  * @param opts.fetchImpl  기본 globalThis.fetch (테스트에서 mock)
+ * @param opts.scope      OAuth2 scope. 기본 FCM_SCOPE (기존 호출부 동작 유지)
  * @returns {Promise<{ accessToken: string, expiresInSec: number }>}
  * @throws {FcmError} 서명 실패 / 토큰 엔드포인트 non-2xx
  */
 export async function createGoogleAccessToken(
   config,
-  { now = new Date(), fetchImpl = fetch } = {},
+  { now = new Date(), fetchImpl = fetch, scope = FCM_SCOPE } = {},
 ) {
   const iat = Math.floor(now.getTime() / 1000);
   const exp = iat + 3600;
@@ -138,7 +143,7 @@ export async function createGoogleAccessToken(
   const claim = base64UrlFromString(
     JSON.stringify({
       iss: config.clientEmail,
-      scope: FCM_SCOPE,
+      scope,
       aud: OAUTH_TOKEN_URL,
       iat,
       exp,

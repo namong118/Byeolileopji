@@ -29,8 +29,8 @@
  *  deviceHealth 가 알려진 enum 이 아니면 throw (조용히 NORMAL 로 대체하지 않는다).
  *
  * ── 인증 ─────────────────────────────────────────────────────────────
- *  아직 **인증 없이** read/write 한다 (`firestore.rules`: careStatus read/create/update
- *  = `if true`, DEVELOPMENT ONLY). Phase 4.4 에서 service-account + rules `if false`.
+ *  Phase 5 STEP 5.3-A — service-account OAuth2 Bearer 로 read/write 한다
+ *  (firestoreAuth.js, FCM 과 동일 secret 재사용).
  *
  * ⚠️ 이 파일은 cron / `scheduled()` 가 아니다. STEP B-4 의 `scheduled()` 가
  *    `computeCompareAndWriteCareStatusSnapshot()` 를 호출하게 된다.
@@ -39,6 +39,7 @@
  */
 
 import { FirestoreError, fromFirestoreFields, toFirestoreFields } from './firestore.js';
+import { getFirestoreAccessToken } from './firestoreAuth.js';
 import { computeCareStatusFromFirestore } from './careStatusReader.js';
 import { serializeCareStatusSnapshot } from '../../../src/services/careStatusSnapshotDoc.ts';
 import {
@@ -55,6 +56,11 @@ export const CARE_STATUS_COLLECTION = 'careStatus';
 function base(env) {
   if (!env.FIREBASE_PROJECT_ID) throw new FirestoreError(500, 'FIREBASE_PROJECT_ID not set');
   return `${HOST}/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents`;
+}
+
+async function authHeaders(env) {
+  const token = await getFirestoreAccessToken(env);
+  return { authorization: `Bearer ${token}` };
 }
 
 async function safeText(res) {
@@ -81,14 +87,13 @@ export async function writeCareStatusSnapshot(env, careRecipientId, snapshot) {
   const params = new URLSearchParams();
   // 문서의 모든 필드를 mask 에 넣는다 → 이전 값이 무엇이든 전체 replace (deterministic).
   for (const key of Object.keys(doc)) params.append('updateMask.fieldPaths', key);
-  if (env.FIREBASE_API_KEY) params.set('key', env.FIREBASE_API_KEY);
 
   const path = `${CARE_STATUS_COLLECTION}/${encodeURIComponent(careRecipientId)}`;
   const url = `${base(env)}/${path}?${params}`;
 
   const res = await fetch(url, {
     method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(await authHeaders(env)) },
     body: JSON.stringify({ fields: toFirestoreFields(doc) }),
   });
   if (!res.ok) {
@@ -171,14 +176,12 @@ export function parseCareStatusDoc(fields) {
 export async function readCareStatusDoc(env, careRecipientId) {
   if (!careRecipientId) throw new Error('readCareStatusDoc: careRecipientId required');
 
-  const params = new URLSearchParams();
-  if (env.FIREBASE_API_KEY) params.set('key', env.FIREBASE_API_KEY);
-  const qs = params.toString();
-
   const path = `${CARE_STATUS_COLLECTION}/${encodeURIComponent(careRecipientId)}`;
-  const url = `${base(env)}/${path}${qs ? `?${qs}` : ''}`;
+  const url = `${base(env)}/${path}`;
 
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', ...(await authHeaders(env)) },
+  });
   if (res.status === 404) return null; // 이전 스냅샷 없음 = 초기 상태 (에러 아님)
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));
 

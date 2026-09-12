@@ -45,7 +45,7 @@ function scrub(err) {
 }
 
 /**
- * @param env  Worker env (FIREBASE_PROJECT_ID / FCM_* / FIREBASE_API_KEY)
+ * @param env  Worker env (FIREBASE_PROJECT_ID / FCM_*)
  * @param arg.careRecipientId  대상자 id
  * @param arg.transition       B-3 deriveCareStatusTransition 결과
  * @param opts.now             Date (JWT iat/exp)

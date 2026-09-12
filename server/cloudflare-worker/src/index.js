@@ -37,7 +37,7 @@ function log(msg) {
 export default {
   /**
    * @param {Request} request
-   * @param {{ FIREBASE_PROJECT_ID?: string, FIREBASE_API_KEY?: string, DEVICE_KEY?: string }} env
+   * @param {{ FIREBASE_PROJECT_ID?: string, FCM_CLIENT_EMAIL?: string, FCM_PRIVATE_KEY?: string, DEVICE_KEY?: string }} env
    */
   async fetch(request, env) {
     const url = new URL(request.url);

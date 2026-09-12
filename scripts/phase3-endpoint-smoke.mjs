@@ -11,6 +11,7 @@
  */
 
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import {
   validateRequest,
@@ -237,8 +238,19 @@ function mockFirestore({ failWrite = false, deviceMissing = false, deviceDisable
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const method = opts.method || 'GET';
-    calls.push({ url: u, method, body: opts.body ? JSON.parse(opts.body) : undefined });
+    // OAuth 토큰 요청은 form-urlencoded 바디라 JSON.parse 하면 안 된다 (Phase 5.3-A).
+    const parsedBody =
+      opts.body && typeof opts.body === 'string' && opts.body.startsWith('{')
+        ? JSON.parse(opts.body)
+        : opts.body;
+    calls.push({ url: u, method, body: parsedBody });
 
+    if (u.includes('oauth2.googleapis.com/token') && method === 'POST') {
+      return new Response(JSON.stringify({ access_token: 'ya29.TEST', expires_in: 3599 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (u.includes('/devices/') && method === 'GET') {
       if (deviceMissing) return new Response('{}', { status: 404 });
       return new Response(
@@ -278,7 +290,19 @@ function mockFirestore({ failWrite = false, deviceMissing = false, deviceDisable
   };
 }
 
-const WORKER_ENV = { FIREBASE_PROJECT_ID: 'p', DEVICE_KEY: KEY };
+// Phase 5.3-A — Firestore REST 도 이제 OAuth 인증이 필요하다 (FCM 과 동일 secret 재사용).
+// 실제 RSA 키로 서명해야 createGoogleAccessToken() 의 Web Crypto importKey 가 통과한다.
+const { privateKey: TEST_PRIV } = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+});
+const WORKER_ENV = {
+  FIREBASE_PROJECT_ID: 'p',
+  DEVICE_KEY: KEY,
+  FCM_CLIENT_EMAIL: 'sa@p.iam.gserviceaccount.com',
+  FCM_PRIVATE_KEY: TEST_PRIV,
+};
 const ingestReq = () =>
   new Request('https://w.example/ingest-device-event', {
     method: 'POST',

@@ -1,13 +1,14 @@
 /**
  * Firestore REST API 헬퍼.
  *
- * ⚠️ 이 Worker 는 Firestore 에 **인증 없이** 접근한다.
- *    Phase 2.5 의 개발용 규칙(firestore.rules)이 events create / devices read 를
- *    `if true` 로 열어 두었기 때문에 가능하다. **DEVELOPMENT ONLY.**
- *
- *    Phase 4 에서 규칙을 좁히면, 여기서 서비스 계정으로 OAuth2 access token 을
- *    발급(JWT 서명)해 Authorization 헤더를 붙여야 한다. 그 전까지는 토큰이 필요 없다.
+ * Phase 5 STEP 5.3-A — service-account OAuth2 Bearer 토큰으로 인증한다
+ * (firestoreAuth.js, FCM 과 동일 secret 재사용). `?key=` 공개 API 키 방식은
+ * 제거했다 — 그 값은 애초에 인증이 아니었다(Firestore Rules 가 열려 있어야만
+ * 동작하는 DEVELOPMENT ONLY 방식). Rules 를 좁혀도(Phase 5.3-D) 이 Worker 는
+ * OAuth 인증 요청이라 Rules 를 우회하는 Admin 경로로 계속 동작한다.
  */
+
+import { getFirestoreAccessToken } from './firestoreAuth.js';
 
 const HOST = 'https://firestore.googleapis.com/v1';
 
@@ -16,8 +17,9 @@ function base(env) {
   return `${HOST}/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 }
 
-function keyParam(env) {
-  return env.FIREBASE_API_KEY ? `?key=${encodeURIComponent(env.FIREBASE_API_KEY)}` : '';
+async function authHeaders(env) {
+  const token = await getFirestoreAccessToken(env);
+  return { authorization: `Bearer ${token}` };
 }
 
 export class FirestoreError extends Error {
@@ -79,8 +81,10 @@ export function fromFirestoreFields(fields) {
 
 /** devices/{deviceId} 조회. 없으면 null. */
 export async function getDevice(env, deviceId) {
-  const url = `${base(env)}/devices/${encodeURIComponent(deviceId)}${keyParam(env)}`;
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const url = `${base(env)}/devices/${encodeURIComponent(deviceId)}`;
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', ...(await authHeaders(env)) },
+  });
   if (res.status === 404) return null;
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));
   const doc = await res.json();
@@ -89,10 +93,10 @@ export async function getDevice(env, deviceId) {
 
 /** events 문서 생성. 생성된 문서 id 반환. */
 export async function createEvent(env, eventObj) {
-  const url = `${base(env)}/events${keyParam(env)}`;
+  const url = `${base(env)}/events`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(await authHeaders(env)) },
     body: JSON.stringify({ fields: toFirestoreFields(eventObj) }),
   });
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));
@@ -103,19 +107,17 @@ export async function createEvent(env, eventObj) {
 /**
  * devices/{deviceId} 의 일부 필드만 갱신 (PATCH + updateMask).
  * Phase 4.1a 에서는 { lastEventAt: Date } 만 쓴다.
- * ⚠️ firestore.rules 가 해당 필드만 허용하도록 제한돼 있어야 한다.
  */
 export async function touchDevice(env, deviceId, fields) {
   const params = new URLSearchParams();
   for (const key of Object.keys(fields)) {
     params.append('updateMask.fieldPaths', key);
   }
-  if (env.FIREBASE_API_KEY) params.set('key', env.FIREBASE_API_KEY);
 
   const url = `${base(env)}/devices/${encodeURIComponent(deviceId)}?${params}`;
   const res = await fetch(url, {
     method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(await authHeaders(env)) },
     body: JSON.stringify({ fields: toFirestoreFields(fields) }),
   });
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));

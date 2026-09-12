@@ -14,6 +14,7 @@
  */
 
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 import {
   toFirestoreFields,
@@ -41,10 +42,21 @@ const THRESHOLDS = {
   emergencyLookbackHours: 12,
   emergencyTtlHours: 12,
 };
-const ENV = { FIREBASE_PROJECT_ID: 'byeolileopji' };
+// Phase 5.3-A — Firestore REST 도 이제 OAuth 인증이 필요하다 (FCM 과 동일 secret 재사용).
+const { privateKey: TEST_PRIV } = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+});
+const ENV = {
+  FIREBASE_PROJECT_ID: 'byeolileopji',
+  FCM_CLIENT_EMAIL: 'sa@byeolileopji.iam.gserviceaccount.com',
+  FCM_PRIVATE_KEY: TEST_PRIV,
+};
 
 /**
  * Firestore REST 를 fetch 로 흉내낸다.
+ *   POST oauth2.googleapis.com/token     → OAuth2 access token (Phase 5.3-A)
  *   POST .../documents:runQuery          → events 쿼리
  *   GET  .../documents/devices/{id}      → device point read
  * write(PATCH/POST /events) 가 호출되면 테스트 실패.
@@ -55,8 +67,19 @@ function mockFirestore({ events = [], device = undefined, deviceMissing = false 
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const method = opts.method || 'GET';
-    const body = opts.body ? JSON.parse(opts.body) : undefined;
+    // OAuth 토큰 요청은 form-urlencoded 바디라 JSON.parse 하면 안 된다 (Phase 5.3-A).
+    const body =
+      opts.body && typeof opts.body === 'string' && opts.body.startsWith('{')
+        ? JSON.parse(opts.body)
+        : opts.body;
     calls.push({ u, method, body });
+
+    if (u.includes('oauth2.googleapis.com/token') && method === 'POST') {
+      return new Response(JSON.stringify({ access_token: 'ya29.TEST', expires_in: 3599 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
 
     if (u.includes(':runQuery') && method === 'POST') {
       const rows = events.map((e) => ({
@@ -105,10 +128,11 @@ function mockFirestore({ events = [], device = undefined, deviceMissing = false 
     assertNoWrite() {
       const writes = calls.filter(
         (c) =>
-          c.method === 'PATCH' ||
-          c.method === 'PUT' ||
-          c.method === 'DELETE' ||
-          (c.method === 'POST' && !c.u.includes(':runQuery')),
+          !c.u.includes('oauth2.googleapis.com') && // OAuth 토큰 발급은 Firestore write 가 아니다
+          (c.method === 'PATCH' ||
+            c.method === 'PUT' ||
+            c.method === 'DELETE' ||
+            (c.method === 'POST' && !c.u.includes(':runQuery'))),
       );
       assert.equal(writes.length, 0, `Firestore WRITE 발생: ${JSON.stringify(writes)}`);
     },

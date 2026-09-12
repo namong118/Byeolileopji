@@ -14,6 +14,7 @@
  */
 
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import workerHandler from '../server/cloudflare-worker/src/index.js';
@@ -34,10 +35,18 @@ const iso = (minutesAgo) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOS
 
 const CARE_ID = 'dev-care-recipient';
 const DEVICE_ID = 'dev-device-livingroom';
+// Phase 5.3-A — Firestore REST 도 이제 OAuth 인증이 필요하다 (FCM 과 동일 secret 재사용).
+const { privateKey: TEST_PRIV } = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+});
 const ENV = {
   FIREBASE_PROJECT_ID: 'byeolileopji',
   CARE_RECIPIENT_ID: CARE_ID,
   DEVICE_ID,
+  FCM_CLIENT_EMAIL: 'sa@byeolileopji.iam.gserviceaccount.com',
+  FCM_PRIVATE_KEY: TEST_PRIV,
 };
 
 const tests = [];
@@ -76,8 +85,19 @@ function mockFirestore({
   globalThis.fetch = async (url, opts = {}) => {
     const u = String(url);
     const method = opts.method || 'GET';
-    const body = opts.body ? JSON.parse(opts.body) : undefined;
+    // OAuth 토큰 요청은 form-urlencoded 바디라 JSON.parse 하면 안 된다 (Phase 5.3-A).
+    const body =
+      opts.body && typeof opts.body === 'string' && opts.body.startsWith('{')
+        ? JSON.parse(opts.body)
+        : opts.body;
     calls.push({ u, method, body });
+
+    if (u.includes('oauth2.googleapis.com/token') && method === 'POST') {
+      return new Response(JSON.stringify({ access_token: 'ya29.TEST', expires_in: 3599 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
 
     const isCareStatusUrl = u.includes(`/${CARE_STATUS_COLLECTION}/`);
 

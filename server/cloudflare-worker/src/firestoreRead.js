@@ -4,12 +4,11 @@
  * 서버 상태 판정(cron, STEP B 이후)에 필요한 최소 데이터만 조회한다.
  * WRITE 없음. 기존 firestore.js 의 value 변환 헬퍼를 재사용한다.
  *
- * ⚠️ 이 Worker 는 아직 Firestore 에 **인증 없이** 접근한다 (firestore.rules 가
- *    events / devices read 를 `if true` 로 열어둠 — DEVELOPMENT ONLY).
- *    Phase 4.4 에서 규칙을 좁히면 service-account access token 이 필요하다.
+ * Phase 5 STEP 5.3-A — service-account OAuth2 Bearer 로 인증한다 (firestoreAuth.js).
  */
 
 import { FirestoreError, fromFirestoreFields } from './firestore.js';
+import { getFirestoreAccessToken } from './firestoreAuth.js';
 
 const HOST = 'https://firestore.googleapis.com/v1';
 
@@ -18,8 +17,9 @@ function base(env) {
   return `${HOST}/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 }
 
-function keyParam(env) {
-  return env.FIREBASE_API_KEY ? `?key=${encodeURIComponent(env.FIREBASE_API_KEY)}` : '';
+async function authHeaders(env) {
+  const token = await getFirestoreAccessToken(env);
+  return { authorization: `Bearer ${token}` };
 }
 
 async function safeText(res) {
@@ -35,8 +35,10 @@ async function safeText(res) {
  * (getDevice 와 동일한 point read — 상태 판정에서도 그대로 쓴다.)
  */
 export async function readDeviceDoc(env, deviceId) {
-  const url = `${base(env)}/devices/${encodeURIComponent(deviceId)}${keyParam(env)}`;
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const url = `${base(env)}/devices/${encodeURIComponent(deviceId)}`;
+  const res = await fetch(url, {
+    headers: { accept: 'application/json', ...(await authHeaders(env)) },
+  });
   if (res.status === 404) return null;
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));
   const doc = await res.json();
@@ -56,7 +58,7 @@ export async function readDeviceDoc(env, deviceId) {
  * @returns {Promise<Array<{ eventType?: string, occurredAt?: string }>>}
  */
 export async function queryRecentEvents(env, careRecipientId, limit = 100) {
-  const url = `${base(env)}:runQuery${keyParam(env)}`;
+  const url = `${base(env)}:runQuery`;
   const structuredQuery = {
     from: [{ collectionId: 'events' }],
     where: {
@@ -72,7 +74,7 @@ export async function queryRecentEvents(env, careRecipientId, limit = 100) {
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(await authHeaders(env)) },
     body: JSON.stringify({ structuredQuery }),
   });
   if (!res.ok) throw new FirestoreError(res.status, await safeText(res));
