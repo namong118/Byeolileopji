@@ -12,6 +12,7 @@ import { colors, radius, spacing, typography } from '../../src/constants/theme';
 import { careStatusConfig } from '../../src/config/careStatusConfig';
 import { SIMULATION_BUTTONS } from '../../src/mock/simulations';
 import { useCareStore } from '../../src/stores/careStore';
+import { useAuthStore } from '../../src/stores/authStore';
 import type { CareStatus, DeviceHealth } from '../../src/types/status';
 import { presentEvent } from '../../src/utils/eventPresenter';
 import { formatClock } from '../../src/utils/time';
@@ -39,6 +40,8 @@ function fmtTime(iso: string | undefined): string {
 }
 
 export default function DeveloperScreen() {
+  const user = useAuthStore((s) => s.user);
+  const signOutUser = useAuthStore((s) => s.signOutUser);
   const simulateEvent = useCareStore((s) => s.simulateEvent);
   const setStatus = useCareStore((s) => s.setStatus);
   const clearStatusOverride = useCareStore((s) => s.clearStatusOverride);
@@ -67,6 +70,17 @@ export default function DeveloperScreen() {
         실제 센서/서버 대신 목업 이벤트를 발생시켜 앱 흐름을 확인합니다.
         Production 빌드에서는 이 화면을 숨깁니다.
       </Text>
+
+      {/* ── 계정 (Phase 5 STEP 5.1) ─────────────────────────────────── */}
+      <SectionHeader title="계정" />
+      <Card>
+        <Row k="로그인" v={user?.email ?? '알 수 없음'} last />
+      </Card>
+      <PressableButton
+        label="로그아웃"
+        onPress={() => void signOutUser()}
+        style={styles.logout}
+      />
 
       <View style={styles.sourceBadge}>
         <Text style={styles.sourceLabel}>Data Source</Text>
@@ -282,6 +296,10 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     marginTop: spacing.sm,
+  },
+  logout: {
+    marginTop: spacing.sm,
+    alignSelf: 'flex-start',
   },
   sourceBadge: {
     marginTop: spacing.lg,
