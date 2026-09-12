@@ -13,6 +13,7 @@ import { careStatusConfig } from '../../src/config/careStatusConfig';
 import { SIMULATION_BUTTONS } from '../../src/mock/simulations';
 import { useCareStore } from '../../src/stores/careStore';
 import { useAuthStore } from '../../src/stores/authStore';
+import { useGuardianStore } from '../../src/stores/guardianStore';
 import type { CareStatus, DeviceHealth } from '../../src/types/status';
 import { presentEvent } from '../../src/utils/eventPresenter';
 import { formatClock } from '../../src/utils/time';
@@ -42,6 +43,7 @@ function fmtTime(iso: string | undefined): string {
 export default function DeveloperScreen() {
   const user = useAuthStore((s) => s.user);
   const signOutUser = useAuthStore((s) => s.signOutUser);
+  const careRecipientId = useGuardianStore((s) => s.careRecipientId);
   const simulateEvent = useCareStore((s) => s.simulateEvent);
   const setStatus = useCareStore((s) => s.setStatus);
   const clearStatusOverride = useCareStore((s) => s.clearStatusOverride);
@@ -71,10 +73,11 @@ export default function DeveloperScreen() {
         Production 빌드에서는 이 화면을 숨깁니다.
       </Text>
 
-      {/* ── 계정 (Phase 5 STEP 5.1) ─────────────────────────────────── */}
+      {/* ── 계정 (Phase 5 STEP 5.1/5.2) ─────────────────────────────── */}
       <SectionHeader title="계정" />
       <Card>
-        <Row k="로그인" v={user?.email ?? '알 수 없음'} last />
+        <Row k="로그인" v={user?.email ?? '알 수 없음'} />
+        <Row k="연결된 돌봄 대상 (guardianLinks)" v={careRecipientId ?? '없음'} last />
       </Card>
       <PressableButton
         label="로그아웃"

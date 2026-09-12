@@ -11,6 +11,8 @@ export type PushPlatform = 'android' | 'ios' | 'web' | 'unknown';
 export interface PushTokenDocInput {
   token: string;
   platform: PushPlatform;
+  /** Phase 5 STEP 5.2 — 소유자 UID. Rules 소유권 검증(5.3)의 기준 필드. */
+  guardianUid: string;
   careRecipientId: string;
   enabled: true;
 }
@@ -18,15 +20,20 @@ export interface PushTokenDocInput {
 /**
  * 등록 입력 검증 + 정규화.
  *
- * @throws token 이 비었거나 careRecipientId 가 비었으면.
+ * @throws token / guardianUid / careRecipientId 중 하나라도 비었으면.
  */
 export function buildPushTokenDoc(input: {
   token: unknown;
   platform: unknown;
+  guardianUid: unknown;
   careRecipientId: unknown;
 }): PushTokenDocInput {
   const token = typeof input.token === 'string' ? input.token.trim() : '';
   if (token === '') throw new Error('buildPushTokenDoc: token required');
+
+  const guardianUid =
+    typeof input.guardianUid === 'string' ? input.guardianUid.trim() : '';
+  if (guardianUid === '') throw new Error('buildPushTokenDoc: guardianUid required');
 
   const careRecipientId =
     typeof input.careRecipientId === 'string' ? input.careRecipientId.trim() : '';
@@ -36,7 +43,7 @@ export function buildPushTokenDoc(input: {
   const platform: PushPlatform =
     raw === 'android' || raw === 'ios' || raw === 'web' ? raw : 'unknown';
 
-  return { token, platform, careRecipientId, enabled: true };
+  return { token, platform, guardianUid, careRecipientId, enabled: true };
 }
 
 /**

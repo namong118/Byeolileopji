@@ -12,6 +12,11 @@
  *
  * init / reload / onSnapshot(events) / onSnapshot(device) / 저빈도 타이머 / AppState active
  * 가 모두 같은 project() 를 통과한다. 타이머 재계산은 Firestore I/O 없음.
+ *
+ * Phase 5 STEP 5.2 — `init()` 이 guardianLinks 로 해석된 careRecipientId 를 인자로
+ * 받는다 (app/_layout.tsx 가 로그인+관계 해석 완료 후 호출한다). `teardown()` 은
+ * 구독뿐 아니라 데이터소스(eventService)와 파생 상태까지 전부 정리한다 — 로그아웃 후
+ * 다른 계정으로 재로그인해도 이전 사용자의 데이터가 남지 않게 하기 위해서다.
  */
 
 import { AppState, type NativeEventSubscription } from 'react-native';
@@ -27,15 +32,18 @@ import type {
 import type { DeviceDoc } from '../types/device';
 import {
   deriveEventViews,
-  deviceRepo,
-  EVENT_DATA_SOURCE,
-  eventService,
+  getDeviceRepo,
+  getEventDataSource,
+  getEventService,
+  initCareDataSource,
+  resetCareDataSource,
   type EventDataSource,
 } from '../services/eventService';
 import type { Unsubscribe } from '../services/eventRepository';
 import { deriveCareStatus, applyStatusOverride } from '../services/careStatus';
 import { deriveDeviceHealth } from '../services/deviceHealth';
 import { careStatusConfig } from '../config/careStatusConfig';
+import { DEV_DEVICE_ID } from '../config/careContext';
 import { presentHome, type CareStatusText } from '../utils/careStatusText';
 import { buildSeedEvents } from '../mock/seedEvents';
 import { mockCareTarget, type CareTarget } from '../mock/careTarget';
@@ -89,7 +97,8 @@ interface CareState extends DerivedSlice {
   /** [개발용] 기기 축 임시 오버라이드 */
   deviceHealthOverride?: DeviceHealth;
 
-  init: () => Promise<void>;
+  /** guardianLinks 로 해석된 careRecipientId 로 데이터소스를 초기화하고 구독을 시작한다. */
+  init: (careRecipientId: string) => Promise<void>;
   reload: () => Promise<void>;
   /** I/O 없이 메모리상 데이터로 상태만 재계산 (타이머 / AppState active) */
   refreshDerived: () => void;
@@ -102,6 +111,7 @@ interface CareState extends DerivedSlice {
   acknowledgeEmergency: () => void;
   /** [개발용] 기기 축을 임시로 덮어쓴다. undefined 면 자동 판정 복귀. */
   setDeviceHealthOverride: (health: DeviceHealth | undefined) => void;
+  /** 구독 + 데이터소스 + 파생 상태를 전부 정리한다 (로그아웃 시 app/_layout.tsx 가 호출). */
   teardown: () => void;
 }
 
@@ -110,6 +120,8 @@ let realtimeUnsub: Unsubscribe | undefined;
 let deviceUnsub: Unsubscribe | undefined;
 let recomputeTimer: ReturnType<typeof setInterval> | undefined;
 let appStateSub: NativeEventSubscription | undefined;
+/** 현재 init() 된 careRecipientId. teardown() 이 undefined 로 되돌린다 (재로그인 시 재초기화 보장). */
+let activeCareRecipientId: string | undefined;
 
 /** 이벤트 + 기기 문서 → 파생 상태 (두 축 독립 계산 + 표시 조합). 순수. */
 function project(input: ProjectInput): DerivedSlice {
@@ -159,7 +171,7 @@ function project(input: ProjectInput): DerivedSlice {
 }
 
 async function loadEvents(): Promise<CareEvent[]> {
-  return eventService.getEvents();
+  return getEventService().getEvents();
 }
 
 /** get() 에서 project 에 넘길 공통 입력을 뽑아낸다 */
@@ -185,7 +197,7 @@ export const useCareStore = create<CareState>((set, get) => ({
   loading: false,
   loadError: undefined,
   actionError: undefined,
-  dataSource: EVENT_DATA_SOURCE,
+  dataSource: 'memory',
   realtime: false,
   careTarget: mockCareTarget,
   emergencyAckedAt: undefined,
@@ -194,11 +206,15 @@ export const useCareStore = create<CareState>((set, get) => ({
 
   ...project({ events: [], now: new Date() }),
 
-  init: async () => {
-    set({ loading: true, loadError: undefined });
+  init: async (careRecipientId) => {
+    if (activeCareRecipientId === careRecipientId) return; // 이미 이 대상으로 초기화됨
+    activeCareRecipientId = careRecipientId;
+    initCareDataSource(careRecipientId, DEV_DEVICE_ID);
+
+    set({ loading: true, loadError: undefined, dataSource: getEventDataSource() });
     try {
-      if (EVENT_DATA_SOURCE === 'memory') {
-        await eventService.seed(buildSeedEvents());
+      if (getEventDataSource() === 'memory') {
+        await getEventService().seed(buildSeedEvents());
       }
       const events = await loadEvents();
       set({
@@ -217,8 +233,8 @@ export const useCareStore = create<CareState>((set, get) => ({
     }
 
     // events 실시간 구독 (최초 1회)
-    if (!realtimeUnsub && eventService.supportsRealtime()) {
-      realtimeUnsub = eventService.subscribeToEvents((events) => {
+    if (!realtimeUnsub && getEventService().supportsRealtime()) {
+      realtimeUnsub = getEventService().subscribeToEvents((events) => {
         set({
           ...project(projectInputFrom({ ...get(), events }, new Date())),
           ready: true,
@@ -229,6 +245,7 @@ export const useCareStore = create<CareState>((set, get) => ({
     }
 
     // devices/{id} 문서 구독 (Firestore 모드, 최초 1회)
+    const deviceRepo = getDeviceRepo();
     if (!deviceUnsub && deviceRepo) {
       deviceUnsub = deviceRepo.subscribe((deviceDoc) => {
         set({
@@ -278,7 +295,7 @@ export const useCareStore = create<CareState>((set, get) => ({
   simulateEvent: async (input) => {
     set({ actionError: undefined });
     try {
-      const created = await eventService.recordEvent(input);
+      const created = await getEventService().recordEvent(input);
       if (!get().realtime) {
         const events = await loadEvents();
         set(project(projectInputFrom({ ...get(), events }, new Date())));
@@ -337,6 +354,22 @@ export const useCareStore = create<CareState>((set, get) => ({
     }
     appStateSub?.remove();
     appStateSub = undefined;
-    set({ realtime: false });
+    activeCareRecipientId = undefined;
+    resetCareDataSource();
+
+    // 이전 사용자의 파생 상태를 전부 비운다 — 다른 계정으로 재로그인해도
+    // 새 init() 이 끝나기 전까지 이전 데이터가 화면에 남지 않게 한다.
+    set({
+      ...project({ events: [], now: new Date() }),
+      ready: false,
+      loading: false,
+      loadError: undefined,
+      actionError: undefined,
+      realtime: false,
+      dataSource: 'memory',
+      deviceDoc: undefined,
+      deviceHealthOverride: undefined,
+      emergencyAckedAt: undefined,
+    });
   },
 }));

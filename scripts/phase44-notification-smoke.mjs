@@ -862,18 +862,49 @@ check('F6. scheduled — FCM 미설정 env 에서도 전환 시 정상 동작 (n
 //  G. pushRegistration 순수 헬퍼
 // ═══════════════════════════════════════════════════════════════════════
 
-check('G1. buildPushTokenDoc — 정규화 + enabled:true', () => {
-  const d = buildPushTokenDoc({ token: '  TOK  ', platform: 'ANDROID', careRecipientId: CARE_ID });
-  assert.deepEqual(d, { token: 'TOK', platform: 'android', careRecipientId: CARE_ID, enabled: true });
+const GUARDIAN_UID = 'guardian-uid-1';
+
+check('G1. buildPushTokenDoc — 정규화 + enabled:true (guardianUid 포함, Phase 5.2)', () => {
+  const d = buildPushTokenDoc({
+    token: '  TOK  ',
+    platform: 'ANDROID',
+    guardianUid: GUARDIAN_UID,
+    careRecipientId: CARE_ID,
+  });
+  assert.deepEqual(d, {
+    token: 'TOK',
+    platform: 'android',
+    guardianUid: GUARDIAN_UID,
+    careRecipientId: CARE_ID,
+    enabled: true,
+  });
 });
 
 check('G2. buildPushTokenDoc — 알 수 없는 platform → unknown', () => {
-  assert.equal(buildPushTokenDoc({ token: 't', platform: 'blackberry', careRecipientId: CARE_ID }).platform, 'unknown');
+  assert.equal(
+    buildPushTokenDoc({
+      token: 't',
+      platform: 'blackberry',
+      guardianUid: GUARDIAN_UID,
+      careRecipientId: CARE_ID,
+    }).platform,
+    'unknown',
+  );
 });
 
-check('G3. buildPushTokenDoc — token / careRecipientId 없으면 throw', () => {
-  assert.throws(() => buildPushTokenDoc({ token: '', platform: 'android', careRecipientId: CARE_ID }), /token/);
-  assert.throws(() => buildPushTokenDoc({ token: 't', platform: 'android', careRecipientId: '' }), /careRecipientId/);
+check('G3. buildPushTokenDoc — token / guardianUid / careRecipientId 없으면 throw', () => {
+  assert.throws(
+    () => buildPushTokenDoc({ token: '', platform: 'android', guardianUid: GUARDIAN_UID, careRecipientId: CARE_ID }),
+    /token/,
+  );
+  assert.throws(
+    () => buildPushTokenDoc({ token: 't', platform: 'android', guardianUid: '', careRecipientId: CARE_ID }),
+    /guardianUid/,
+  );
+  assert.throws(
+    () => buildPushTokenDoc({ token: 't', platform: 'android', guardianUid: GUARDIAN_UID, careRecipientId: '' }),
+    /careRecipientId/,
+  );
 });
 
 check('G4. pushTokenDocId — 결정적, 같은 토큰 → 같은 id, 다른 토큰 → 다른 id', () => {

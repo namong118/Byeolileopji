@@ -6,13 +6,16 @@
  *   UI → careStore → EventService → EventRepository
  *                                    ├─ FirestoreEventRepository  (Firebase config 있을 때)
  *                                    └─ InMemoryEventRepository   (폴백)
+ *
+ * Phase 5 STEP 5.2 — careRecipientId 는 더 이상 이 파일에 하드코딩되지 않는다.
+ * `initCareDataSource()` 가 로그인 후 guardianLinks 로 해석된 careRecipientId 를
+ * 주입받아 인스턴스를 만든다 (careStore.init() 이 매 로그인마다 호출한다).
  */
 
 import type { CareEvent, NewCareEvent } from '../types/events';
 import { isSameDay } from '../utils/time';
 import { createId } from '../utils/id';
 import { ACTIVITY_EVENT_TYPES } from './eventViews';
-import { DEV_CARE_RECIPIENT_ID, DEV_DEVICE_ID } from '../config/careContext';
 import { isFirebaseConfigured } from '../config/env';
 import {
   InMemoryEventRepository,
@@ -29,9 +32,11 @@ import {
 
 export class EventService {
   private readonly repo: EventRepository;
+  private readonly careRecipientId: string;
 
-  constructor(repo: EventRepository) {
+  constructor(repo: EventRepository, careRecipientId: string) {
     this.repo = repo;
+    this.careRecipientId = careRecipientId;
   }
 
   /** 새 이벤트를 만들어 저장하고, 저장된(정규화된) CareEvent 를 돌려준다. */
@@ -42,7 +47,7 @@ export class EventService {
       eventType: input.eventType,
       source: input.source,
       location: input.location,
-      careRecipientId: input.careRecipientId ?? DEV_CARE_RECIPIENT_ID,
+      careRecipientId: input.careRecipientId ?? this.careRecipientId,
       deviceId: input.deviceId,
       metadata: input.metadata,
     };
@@ -90,40 +95,77 @@ export { deriveEventViews, type EventViews } from './eventViews';
 
 export type EventDataSource = 'firebase' | 'memory';
 
-function createEventService(): {
+interface CareDataSource {
   service: EventService;
   deviceRepo?: DeviceRepository;
   dataSource: EventDataSource;
-} {
+}
+
+function createEventService(
+  careRecipientId: string,
+  deviceId: string,
+): CareDataSource {
   if (isFirebaseConfigured()) {
     const db = getFirestoreDb();
     if (db) {
       return {
         service: new EventService(
-          new FirestoreEventRepository(db, DEV_CARE_RECIPIENT_ID),
+          new FirestoreEventRepository(db, careRecipientId),
+          careRecipientId,
         ),
-        deviceRepo: new FirestoreDeviceRepository(db, DEV_DEVICE_ID),
+        deviceRepo: new FirestoreDeviceRepository(db, deviceId),
         dataSource: 'firebase',
       };
     }
   }
   return {
-    service: new EventService(new InMemoryEventRepository()),
+    service: new EventService(new InMemoryEventRepository(), careRecipientId),
     deviceRepo: undefined,
     dataSource: 'memory',
   };
 }
 
-const created = createEventService();
+let current: CareDataSource | undefined;
 
-/** 앱 전역에서 공유하는 서비스 인스턴스. */
-export const eventService = created.service;
+/**
+ * 로그인 + guardianLinks 해석이 끝난 뒤 careStore.init() 이 호출한다.
+ * 재로그인(다른 계정/관계 변경) 시 다시 호출되어 이전 인스턴스를 완전히 교체한다.
+ */
+export function initCareDataSource(
+  careRecipientId: string,
+  deviceId: string,
+): void {
+  current = createEventService(careRecipientId, deviceId);
+}
+
+/** 로그아웃 시 careStore.teardown() 이 호출한다 — 다음 initCareDataSource() 전까지 접근 시 throw. */
+export function resetCareDataSource(): void {
+  current = undefined;
+}
+
+function requireCurrent(): CareDataSource {
+  if (!current) {
+    throw new Error(
+      'eventService: initCareDataSource() 가 아직 호출되지 않았습니다 (로그인/관계 해석 전).',
+    );
+  }
+  return current;
+}
+
+/** 앱 전역에서 공유하는 서비스 인스턴스 (로그인 상태에 따라 교체된다). */
+export function getEventService(): EventService {
+  return requireCurrent().service;
+}
 
 /**
  * 기기(devices/{id}) 구독. Firestore 모드에서만 존재한다.
  * undefined 면 기기 축은 항상 'unknown' (문서 없음).
  */
-export const deviceRepo: DeviceRepository | undefined = created.deviceRepo;
+export function getDeviceRepo(): DeviceRepository | undefined {
+  return requireCurrent().deviceRepo;
+}
 
 /** 현재 어떤 저장소를 쓰는지 (개발자 화면 표시용). */
-export const EVENT_DATA_SOURCE: EventDataSource = created.dataSource;
+export function getEventDataSource(): EventDataSource {
+  return requireCurrent().dataSource;
+}

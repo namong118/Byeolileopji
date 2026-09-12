@@ -19,14 +19,17 @@
  *  조용히 무시한다 (앱 실행을 막지 않는다). Firestore 미설정도 마찬가지.
  *
  * ── 이 파일이 하지 않는 것 ────────────────────────────────────────
- *  Firebase Auth / guardian 관계 / 알림 수신 핸들러 / 딥링크 라우팅 — 다음 STEP.
+ *  알림 수신 핸들러 / 딥링크 라우팅 — 다음 STEP.
  *  지금은 "토큰을 pushTokens 에 올려두는 것" 까지만.
+ *
+ * Phase 5 STEP 5.2 — guardianUid/careRecipientId 는 더 이상 기본값이 없다. 호출부
+ * (app/_layout.tsx) 가 로그인 UID + guardianLinks 로 해석된 careRecipientId 를
+ * 반드시 전달해야 한다 (둘 다 확정되기 전까지는 호출하지 않는다).
  */
 
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 
 import { getFirestoreDb } from '../lib/firebase';
-import { DEV_CARE_RECIPIENT_ID } from '../config/careContext';
 import { buildPushTokenDoc, pushTokenDocId } from './pushTokenDoc';
 
 export { buildPushTokenDoc, pushTokenDocId } from './pushTokenDoc';
@@ -45,12 +48,15 @@ export const CARE_STATUS_ANDROID_CHANNEL = 'care-status';
  * expo-notifications / expo-device 는 **동적 import** 한다 → Node 스모크(순수 함수만
  * import)와 웹 번들에서 native 모듈을 끌어오지 않는다.
  *
+ * @param params.guardianUid       로그인한 Firebase Auth UID (토큰 소유자)
+ * @param params.careRecipientId   guardianLinks 로 해석된 대상자 id
  * @returns {Promise<{ ok: true, tokenId: string } | { ok: false, reason: string }>}
  */
-export async function registerForCareStatusPush(options?: {
-  careRecipientId?: string;
+export async function registerForCareStatusPush(params: {
+  guardianUid: string;
+  careRecipientId: string;
 }): Promise<{ ok: true; tokenId: string } | { ok: false; reason: string }> {
-  const careRecipientId = options?.careRecipientId ?? DEV_CARE_RECIPIENT_ID;
+  const { guardianUid, careRecipientId } = params;
 
   let Notifications: typeof import('expo-notifications');
   let Device: typeof import('expo-device');
@@ -82,6 +88,7 @@ export async function registerForCareStatusPush(options?: {
     const built = buildPushTokenDoc({
       token: devicePushToken.data,
       platform: devicePushToken.type,
+      guardianUid,
       careRecipientId,
     });
 
@@ -94,6 +101,7 @@ export async function registerForCareStatusPush(options?: {
       {
         token: built.token,
         platform: built.platform,
+        guardianUid: built.guardianUid,
         careRecipientId: built.careRecipientId,
         enabled: true,
         updatedAt: serverTimestamp(),

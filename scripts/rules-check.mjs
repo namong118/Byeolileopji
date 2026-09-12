@@ -102,6 +102,23 @@ check('pushTokens 블록 (Phase 4.4 STEP 1) — create 허용, update 는 hasOnl
   assert.ok(/allow delete: if false/.test(block), 'pushTokens delete 는 잠겨 있어야 함');
 });
 
+check('guardianLinks 블록 (Phase 5 STEP 5.2) — 로그인 + 소유자만 read, write 전부 잠금', () => {
+  const m = src.match(/match \/guardianLinks\/\{linkId\}\s*{([\s\S]*?)\n {4}}/);
+  assert.ok(m, 'guardianLinks 블록을 찾을 수 없음');
+  const block = m[1];
+  assert.ok(/allow read: if/.test(block), 'guardianLinks read 규칙 없음');
+  assert.ok(!/allow read: if true/.test(block), 'guardianLinks read 가 열려있으면 안 됨(DEVELOPMENT ONLY 아님)');
+  assert.ok(/request\.auth\s*!=\s*null/.test(block), 'guardianLinks read 는 로그인(request.auth != null) 을 요구해야 함');
+  assert.ok(
+    /request\.auth\.uid\s*==\s*resource\.data\.guardianUid/.test(block),
+    'guardianLinks read 는 request.auth.uid == resource.data.guardianUid (소유자 검증) 여야 함',
+  );
+  assert.ok(
+    /allow create, update, delete: if false/.test(block),
+    'guardianLinks create/update/delete 는 전부 잠겨 있어야 함 (앱은 만들지 않는다)',
+  );
+});
+
 check('DEVELOPMENT ONLY 표기가 있다', () => {
   assert.ok(/DEVELOPMENT ONLY/.test(raw));
 });

@@ -58,6 +58,13 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
 
     authUnsub = onAuthStateChanged(auth, (user) => {
+      if (__DEV__) {
+        // [STEP 5.2 진단용 임시 로그] guardianLinks "연결 없음" 오판정 원인 조사.
+        // uid 전체는 출력하지 않는다 — Firebase Console 의 UID 앞 6자와 눈으로 대조하는 용도.
+        console.log(
+          `[별일없지][diag] onAuthStateChanged uid=${user ? `${user.uid.slice(0, 6)}…(len ${user.uid.length})` : 'null'}`,
+        );
+      }
       set({ user, authLoading: false });
     });
   },

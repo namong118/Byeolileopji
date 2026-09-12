@@ -23,6 +23,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~57.0.2",
@@ -35,7 +36,8 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "test:smoke": "node scripts/phase25-smoke.mjs && node scripts/phase3-endpoint-smoke.mjs && node scripts/phase4-status-smoke.mjs && node scripts/phase41-devicehealth-smoke.mjs && node scripts/phase43-server-carestatus-smoke.mjs && node scripts/phase43-firestore-reader-smoke.mjs && node scripts/phase43-carestatus-writer-smoke.mjs && node scripts/phase43-transition-smoke.mjs && node scripts/phase43-scheduled-smoke.mjs && node scripts/phase44-notification-smoke.mjs && node scripts/phase5-auth-smoke.mjs && node scripts/rules-check.mjs && node scripts/firmware-check.mjs"
+    "test:smoke": "node scripts/phase25-smoke.mjs && node scripts/phase3-endpoint-smoke.mjs && node scripts/phase4-status-smoke.mjs && node scripts/phase41-devicehealth-smoke.mjs && node scripts/phase43-server-carestatus-smoke.mjs && node scripts/phase43-firestore-reader-smoke.mjs && node scripts/phase43-carestatus-writer-smoke.mjs && node scripts/phase43-transition-smoke.mjs && node scripts/phase43-scheduled-smoke.mjs && node scripts/phase44-notification-smoke.mjs && node scripts/phase5-auth-smoke.mjs && node scripts/phase5-guardian-link-smoke.mjs && node scripts/rules-check.mjs && node scripts/firmware-check.mjs",
+    "test:rules:emulator": "npx --yes firebase-tools@13 emulators:exec --only firestore --project demo-byeolileopji \"node scripts/phase5-guardianlinks-rules-emulator-test.mjs\""
   },
   "private": true
 }

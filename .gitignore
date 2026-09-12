@@ -43,6 +43,12 @@ google-services.json
 GoogleService-Info.plist
 .firebase/
 
+# Firebase emulator (Phase 5 STEP 5.2 — npm run test:rules:emulator)
+firestore-debug.log
+firebase-debug.log
+ui-debug.log
+firestore-export/
+
 # Phase 3 디바이스/서버 비밀
 secrets.h
 .dev.vars

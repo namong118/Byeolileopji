@@ -72,6 +72,19 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Guardian ↔ CareRecipient 관계 (Phase 5 STEP 5.2).
+    //   문서 id = `{guardianUid}_{careRecipientId}` (deterministic composite, 앱은 만들지 않는다).
+    //   앱은 discovery 를 위해 `guardianUid == 로그인 uid` 로 쿼리한다 — 이 규칙은
+    //   그 쿼리가 반환하는 각 문서에 대해 "자기 문서인가" 만 검증한다(Firestore 는
+    //   쿼리 자체의 필터가 아니라 결과로 오는 각 문서에 이 규칙을 적용한다).
+    //   문서는 Firebase Console 에서 수동 생성한다(STEP 5.2) — 앱은 생성/수정/삭제하지 않는다.
+    match /guardianLinks/{linkId} {
+      allow read: if request.auth != null
+                  && request.auth.uid == resource.data.guardianUid;
+
+      allow create, update, delete: if false;
+    }
+
     // 디바이스 레지스트리.
     match /devices/{deviceId} {
       allow read: if true;   // DEVELOPMENT ONLY
