@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { Redirect } from 'expo-router';
 
 import {
   Card,
-  Notice,
   PressableButton,
   ScreenScrollView,
   SectionHeader,
@@ -11,6 +11,7 @@ import {
 import { colors, radius, spacing, typography } from '../../src/constants/theme';
 import { careStatusConfig } from '../../src/config/careStatusConfig';
 import { SIMULATION_BUTTONS } from '../../src/mock/simulations';
+import { simulationEventService } from '../../src/services/simulationEventService';
 import { useCareStore } from '../../src/stores/careStore';
 import { useAuthStore } from '../../src/stores/authStore';
 import { useGuardianStore } from '../../src/stores/guardianStore';
@@ -44,7 +45,6 @@ export default function DeveloperScreen() {
   const user = useAuthStore((s) => s.user);
   const signOutUser = useAuthStore((s) => s.signOutUser);
   const careRecipientId = useGuardianStore((s) => s.careRecipientId);
-  const simulateEvent = useCareStore((s) => s.simulateEvent);
   const setStatus = useCareStore((s) => s.setStatus);
   const clearStatusOverride = useCareStore((s) => s.clearStatusOverride);
   const acknowledgeEmergency = useCareStore((s) => s.acknowledgeEmergency);
@@ -57,13 +57,18 @@ export default function DeveloperScreen() {
   const deviceDoc = useCareStore((s) => s.deviceDoc);
   const dataSource = useCareStore((s) => s.dataSource);
   const realtime = useCareStore((s) => s.realtime);
-  const actionError = useCareStore((s) => s.actionError);
-  const reload = useCareStore((s) => s.reload);
   const [lastLog, setLastLog] = useState<string>();
   const [detailError, setDetailError] = useState<string>();
 
   const overrideActive = Boolean(statusOverride);
   const effectiveDeviceHealth = deviceHealthOverride ?? deviceHealth.health;
+
+  // Phase 5 STEP 5.3-C — production 빌드에서는 이 화면 자체를 렌더링하지 않는다.
+  // (tabs) 레이아웃에서도 href:null 로 탭을 숨기지만, 직접 딥링크로 들어와도
+  // 막히도록 화면 코드 자체에서도 차단한다. (hooks 는 항상 위에서 먼저 호출된다.)
+  if (!__DEV__) {
+    return <Redirect href="/" />;
+  }
 
   return (
     <ScreenScrollView>
@@ -184,6 +189,10 @@ export default function DeveloperScreen() {
 
       {/* ── 이벤트 발생 ────────────────────────────────────────────────── */}
       <SectionHeader title="이벤트 발생" />
+      <Text style={styles.note}>
+        이 버튼은 실제 Firestore 에 저장되지 않는 InMemory 전용 이벤트입니다
+        (simulationEventService — production 데이터/guardian 관계와 완전히 분리).
+      </Text>
       <View style={styles.grid}>
         {SIMULATION_BUTTONS.map((btn) => (
           <PressableButton
@@ -194,7 +203,7 @@ export default function DeveloperScreen() {
               setDetailError(undefined);
               try {
                 const input = btn.build();
-                const created = await simulateEvent(input);
+                const created = await simulationEventService.recordEvent(input);
                 setLastLog(
                   `${formatClock(created.occurredAt)} · ${
                     presentEvent(created).shortMessage
@@ -210,17 +219,9 @@ export default function DeveloperScreen() {
         ))}
       </View>
 
-      {actionError ? (
+      {detailError ? (
         <View style={styles.errorBlock}>
-          <Notice message={actionError} tone="error" />
-          {detailError ? (
-            <Text style={styles.detailError}>개발용 상세: {detailError}</Text>
-          ) : null}
-          <PressableButton
-            label="다시 불러오기"
-            onPress={() => void reload()}
-            style={styles.retry}
-          />
+          <Text style={styles.detailError}>개발용 상세: {detailError}</Text>
         </View>
       ) : null}
 
@@ -362,9 +363,6 @@ const styles = StyleSheet.create({
   detailError: {
     ...typography.caption,
     color: colors.textSecondary,
-  },
-  retry: {
-    alignSelf: 'flex-start',
   },
   statusRow: {
     flexDirection: 'row',

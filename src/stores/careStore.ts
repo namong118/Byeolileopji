@@ -17,12 +17,16 @@
  * 받는다 (app/_layout.tsx 가 로그인+관계 해석 완료 후 호출한다). `teardown()` 은
  * 구독뿐 아니라 데이터소스(eventService)와 파생 상태까지 전부 정리한다 — 로그아웃 후
  * 다른 계정으로 재로그인해도 이전 사용자의 데이터가 남지 않게 하기 위해서다.
+ *
+ * Phase 5 STEP 5.3-C — Developer Simulation 은 이 스토어를 거치지 않는다
+ * (src/services/simulationEventService.ts, 항상 InMemory). 그래서 이 파일에는
+ * simulateEvent/actionError 가 없다 — production 데이터소스와 완전히 분리하기 위해서다.
  */
 
 import { AppState, type NativeEventSubscription } from 'react-native';
 import { create } from 'zustand';
 
-import type { CareEvent, NewCareEvent } from '../types/events';
+import type { CareEvent } from '../types/events';
 import type {
   CareStatus,
   CareStatusResult,
@@ -86,7 +90,6 @@ interface CareState extends DerivedSlice {
   ready: boolean;
   loading: boolean;
   loadError?: string;
-  actionError?: string;
   dataSource: EventDataSource;
   realtime: boolean;
   careTarget: CareTarget;
@@ -102,7 +105,6 @@ interface CareState extends DerivedSlice {
   reload: () => Promise<void>;
   /** I/O 없이 메모리상 데이터로 상태만 재계산 (타이머 / AppState active) */
   refreshDerived: () => void;
-  simulateEvent: (input: NewCareEvent) => Promise<CareEvent>;
   /** [개발용] 사람 상태를 임시로 덮어쓴다 (TTL 후 자동 판정 복귀) */
   setStatus: (status: CareStatus) => void;
   /** [개발용] 사람 상태 임시 오버라이드 즉시 해제 */
@@ -196,7 +198,6 @@ export const useCareStore = create<CareState>((set, get) => ({
   ready: false,
   loading: false,
   loadError: undefined,
-  actionError: undefined,
   dataSource: 'memory',
   realtime: false,
   careTarget: mockCareTarget,
@@ -292,24 +293,6 @@ export const useCareStore = create<CareState>((set, get) => ({
     set(project(projectInputFrom(get(), new Date())));
   },
 
-  simulateEvent: async (input) => {
-    set({ actionError: undefined });
-    try {
-      const created = await getEventService().recordEvent(input);
-      if (!get().realtime) {
-        const events = await loadEvents();
-        set(project(projectInputFrom({ ...get(), events }, new Date())));
-      }
-      return created;
-    } catch (error) {
-      if (__DEV__) console.error('[별일없지] 이벤트 저장 실패', error);
-      set({
-        actionError: '이벤트 저장에 실패했어요. 네트워크 연결을 확인해 주세요.',
-      });
-      throw error;
-    }
-  },
-
   setStatus: (status) => {
     const statusOverride: StatusOverride = {
       status,
@@ -364,7 +347,6 @@ export const useCareStore = create<CareState>((set, get) => ({
       ready: false,
       loading: false,
       loadError: undefined,
-      actionError: undefined,
       realtime: false,
       dataSource: 'memory',
       deviceDoc: undefined,

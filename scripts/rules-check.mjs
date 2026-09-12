@@ -1,11 +1,11 @@
 /**
  * firestore.rules 정적 구조 검사 (완전한 rules 유닛 테스트가 아님).
  *
- * 이 환경에는 Java / firebase-tools / Firestore 에뮬레이터가 없어
- * @firebase/rules-unit-testing 기반 자동 테스트를 돌릴 수 없다.
- * → 여기서는 "실수로 위험한 규칙이 들어갔는지" 만 정적으로 확인한다.
- * → 의미 검증은 Firebase Console > Firestore > 규칙 Playground 에서 수동으로 한다
- *   (README "Phase 4.1a — Firestore rules" 절 참고).
+ * Phase 5 STEP 5.3-D — Rules hardening 이후 버전.
+ * 여기서는 "실수로 위험한(열린) 규칙이 들어갔는지" 만 정적으로 확인한다.
+ * 실제 request.auth/enabled 의미론(ALLOW/DENY 매트릭스)은 Firestore 에뮬레이터
+ * 기반 테스트(scripts/phase53-rules-hardening-emulator-test.mjs,
+ * `npm run test:rules:emulator` 로 실행)로 검증한다.
  *
  * 실행:  node scripts/rules-check.mjs   (npm run test:smoke 에 포함)
  */
@@ -20,6 +20,15 @@ const raw = fs.readFileSync(
 // 주석(//...) 을 제거해 실제 규칙 코드만 검사한다
 const src = raw.replace(/\/\/[^\n]*/g, '');
 
+/** `match /X/{y} { ... }` 블록 본문만 뽑아낸다 (중첩 없는 최상위 컬렉션 블록 전제). */
+function collectionBlock(name, param) {
+  const re = new RegExp(
+    `match \\/${name}\\/\\{${param}\\}\\s*\\{([\\s\\S]*?)\\n {4}\\}`,
+  );
+  const m = src.match(re);
+  return m ? m[1] : null;
+}
+
 const tests = [];
 const check = (name, fn) => tests.push({ name, fn });
 
@@ -33,94 +42,105 @@ check('전체 DB 와일드카드(match /{document=**}) 를 쓰지 않는다', ()
   assert.ok(!/match\s+\/\{document=\*\*\}/.test(src));
 });
 
-check('devices update 는 lastEventAt / lastHeartbeatAt 만 허용 (hasOnly)', () => {
-  const m = src.match(/match \/devices\/\{deviceId\}\s*{([\s\S]*?)\n {4}}/);
-  assert.ok(m, 'devices 블록을 찾을 수 없음');
-  const block = m[1];
-  assert.ok(/allow update:/.test(block), 'devices update 규칙 없음');
-  assert.ok(/hasOnly\(\[[^\]]*\]\)/.test(block), 'devices update 는 hasOnly 여야 함');
-  assert.ok(/'lastEventAt'/.test(block), 'lastEventAt 허용 없음');
-  assert.ok(/'lastHeartbeatAt'/.test(block), 'lastHeartbeatAt 허용 없음 (Phase 4.1b)');
-  assert.ok(/allow create, delete: if false/.test(block));
-});
-
-check('devices 블록의 update 허용 필드는 lastEventAt / lastHeartbeatAt 뿐', () => {
-  const m = src.match(/match \/devices\/\{deviceId\}\s*{([\s\S]*?)\n {4}}/);
-  assert.ok(m, 'devices 블록을 찾을 수 없음');
-  const allowed = new Set();
-  for (const h of m[1].matchAll(/hasOnly\(\[([^\]]*)\]\)/g)) {
-    for (const f of h[1].split(',')) {
-      const t = f.trim().replace(/^'|'$/g, '');
-      if (t) allowed.add(t);
-    }
-  }
-  assert.deepEqual([...allowed].sort(), ['lastEventAt', 'lastHeartbeatAt']);
-});
-
-check('디바이스 핵심 레지스트리 필드는 어떤 hasOnly 목록에도 없다', () => {
-  const allowedFields = new Set();
-  for (const m of src.matchAll(/hasOnly\(\[([^\]]*)\]\)/g)) {
-    for (const f of m[1].split(',')) {
-      const t = f.trim().replace(/^'|'$/g, '');
-      if (t) allowedFields.add(t);
-    }
-  }
-  // careRecipientId 는 devices / pushTokens 어느 쪽에서도 클라이언트가 못 바꾼다
-  for (const core of ['careRecipientId', 'type', 'location', 'name', 'createdAt']) {
-    assert.ok(
-      !allowedFields.has(core),
-      `필드 ${core} 가 클라이언트 변경 허용 목록에 있음`,
-    );
-  }
-});
-
-check('careRecipients / events update·delete 는 여전히 잠겨 있다', () => {
-  assert.ok(/match \/careRecipients\/\{careRecipientId\}\s*{[\s\S]*?allow write: if false/.test(src));
-  assert.ok(/match \/events\/\{eventId\}\s*{[\s\S]*?allow update, delete: if false/.test(src));
-});
-
-check('careStatus 는 파생 데이터 전용 컬렉션 (Phase 4.3 B-2, delete 잠금)', () => {
-  const m = src.match(/match \/careStatus\/\{careRecipientId\}\s*{([\s\S]*?)\n {4}}/);
-  assert.ok(m, 'careStatus 블록을 찾을 수 없음');
-  const block = m[1];
-  assert.ok(/allow read: if true/.test(block), 'careStatus read 허용 없음');
-  assert.ok(/allow create, update: if true/.test(block), 'Worker 계산 결과 write 허용 없음');
-  assert.ok(/allow delete: if false/.test(block), 'careStatus delete 는 잠겨 있어야 함');
-  // careStatus 는 필드 화이트리스트(hasOnly)를 쓰지 않는다 — 서버가 전체 문서를 replace 한다.
-  assert.ok(!/hasOnly/.test(block), 'careStatus 블록에 예상치 못한 hasOnly');
-});
-
-check('pushTokens 블록 (Phase 4.4 STEP 1) — create 허용, update 는 hasOnly, delete 잠금', () => {
-  const m = src.match(/match \/pushTokens\/\{tokenId\}\s*{([\s\S]*?)\n {4}}/);
-  assert.ok(m, 'pushTokens 블록을 찾을 수 없음');
-  const block = m[1];
-  assert.ok(/allow read: if true/.test(block), 'pushTokens read 허용 없음 (Worker 조회)');
-  assert.ok(/allow create: if true/.test(block), 'pushTokens create 허용 없음 (앱 등록)');
-  assert.ok(/allow update: if/.test(block) && /hasOnly\(/.test(block), 'pushTokens update 는 hasOnly 여야 함');
-  assert.ok(/'token'/.test(block) && /'enabled'/.test(block), 'token / enabled 갱신 허용 없음');
-  assert.ok(!/'careRecipientId'/.test(block), 'careRecipientId 는 갱신 허용 목록에 없어야 함');
-  assert.ok(/allow delete: if false/.test(block), 'pushTokens delete 는 잠겨 있어야 함');
-});
-
-check('guardianLinks 블록 (Phase 5 STEP 5.2) — 로그인 + 소유자만 read, write 전부 잠금', () => {
-  const m = src.match(/match \/guardianLinks\/\{linkId\}\s*{([\s\S]*?)\n {4}}/);
-  assert.ok(m, 'guardianLinks 블록을 찾을 수 없음');
-  const block = m[1];
-  assert.ok(/allow read: if/.test(block), 'guardianLinks read 규칙 없음');
-  assert.ok(!/allow read: if true/.test(block), 'guardianLinks read 가 열려있으면 안 됨(DEVELOPMENT ONLY 아님)');
-  assert.ok(/request\.auth\s*!=\s*null/.test(block), 'guardianLinks read 는 로그인(request.auth != null) 을 요구해야 함');
+check('열린 규칙(allow ...: if true) 이 어디에도 남아있지 않다', () => {
   assert.ok(
-    /request\.auth\.uid\s*==\s*resource\.data\.guardianUid/.test(block),
-    'guardianLinks read 는 request.auth.uid == resource.data.guardianUid (소유자 검증) 여야 함',
-  );
-  assert.ok(
-    /allow create, update, delete: if false/.test(block),
-    'guardianLinks create/update/delete 는 전부 잠겨 있어야 함 (앱은 만들지 않는다)',
+    !/allow\s+[\w,\s]+:\s*if\s+true/.test(src),
+    'DEVELOPMENT ONLY 시절의 `if true` 가 아직 남아있음',
   );
 });
 
-check('DEVELOPMENT ONLY 표기가 있다', () => {
-  assert.ok(/DEVELOPMENT ONLY/.test(raw));
+check('isSignedIn() / isGuardianOf() 헬퍼가 정의돼 있다', () => {
+  assert.match(src, /function isSignedIn\(\)/);
+  assert.match(src, /function isGuardianOf\(careRecipientId\)/);
+});
+
+check('isGuardianOf() — 단순 exists() 만이 아니라 guardianLinks.enabled == true 를 실제로 검사한다', () => {
+  const m = src.match(/function isGuardianOf\(careRecipientId\)\s*\{([\s\S]*?)\n {4}\}/);
+  assert.ok(m, 'isGuardianOf 함수 본문을 찾을 수 없음');
+  const body = m[1];
+  assert.match(body, /guardianLinks/, 'guardianLinks 문서를 참조해야 함');
+  assert.match(body, /\.data\.enabled\s*==\s*true/, 'enabled == true 검사가 있어야 함');
+  assert.match(body, /exists\(/, 'exists() 로 미존재 문서에서의 오류를 방어해야 함');
+});
+
+check('guardianLinks 블록 — 자기 문서만 read 허용, mutation 전부 false', () => {
+  const block = collectionBlock('guardianLinks', 'linkId');
+  assert.ok(block, 'guardianLinks 블록을 찾을 수 없음');
+  assert.match(block, /allow read: if/);
+  assert.match(block, /request\.auth\.uid\s*==\s*resource\.data\.guardianUid/);
+  assert.match(block, /allow create, update, delete: if false/);
+  // enabled 여부와 무관하게 자기 링크는 read 되어야 하므로 isGuardianOf() 를 쓰면 안 된다.
+  assert.doesNotMatch(block, /isGuardianOf/, 'guardianLinks read 는 isGuardianOf() 에 의존하면 안 됨(연결 해제 감지 불가해짐)');
+});
+
+check('events 블록 — read 는 isGuardianOf(), write(client) 는 전부 false', () => {
+  const block = collectionBlock('events', 'eventId');
+  assert.ok(block, 'events 블록을 찾을 수 없음');
+  assert.match(block, /allow read: if isGuardianOf\(resource\.data\.careRecipientId\)/);
+  assert.match(block, /allow create, update, delete: if false/);
+});
+
+check('careRecipients 블록 — read 는 isGuardianOf(문서 id), write(client) 는 전부 false', () => {
+  const block = collectionBlock('careRecipients', 'careRecipientId');
+  assert.ok(block, 'careRecipients 블록을 찾을 수 없음');
+  assert.match(block, /allow read: if isGuardianOf\(careRecipientId\)/);
+  assert.match(block, /allow create, update, delete: if false/);
+});
+
+check('careStatus 블록 — read 는 isGuardianOf(문서 id), write(client) 는 전부 false (서버 파생 데이터)', () => {
+  const block = collectionBlock('careStatus', 'careRecipientId');
+  assert.ok(block, 'careStatus 블록을 찾을 수 없음');
+  assert.match(block, /allow read: if isGuardianOf\(careRecipientId\)/);
+  assert.match(block, /allow create, update, delete: if false/);
+});
+
+check('devices 블록 — read 는 isGuardianOf(resource.data.careRecipientId), write(client) 는 전부 false', () => {
+  const block = collectionBlock('devices', 'deviceId');
+  assert.ok(block, 'devices 블록을 찾을 수 없음');
+  assert.match(block, /allow read: if isGuardianOf\(resource\.data\.careRecipientId\)/);
+  assert.match(block, /allow create, update, delete: if false/);
+  // Phase 4.1a/4.1b 시절 client(무인증 Worker) hasOnly 허용이 완전히 사라졌는지 확인.
+  assert.doesNotMatch(block, /hasOnly/, 'devices 에 예전 client update 허용(hasOnly) 이 남아있으면 안 됨');
+});
+
+check('pushTokens 블록 — 소유자(guardianUid) + isGuardianOf 이중 검증, spoof 방지, delete 금지', () => {
+  const block = collectionBlock('pushTokens', 'tokenId');
+  assert.ok(block, 'pushTokens 블록을 찾을 수 없음');
+
+  assert.match(block, /allow read: if/);
+  assert.match(block, /resource\.data\.guardianUid\s*==\s*request\.auth\.uid/, 'read 는 자기 토큰만 허용해야 함');
+  assert.match(block, /isGuardianOf\(resource\.data\.careRecipientId\)/, 'read 도 연결 상태를 검사해야 함');
+
+  assert.match(block, /allow create: if/);
+  assert.match(
+    block,
+    /request\.resource\.data\.guardianUid\s*==\s*request\.auth\.uid/,
+    'create 는 guardianUid 스푸핑을 막아야 함',
+  );
+  assert.match(
+    block,
+    /isGuardianOf\(request\.resource\.data\.careRecipientId\)/,
+    'create 는 연결된(enabled) careRecipient 인지 확인해야 함',
+  );
+
+  assert.match(block, /allow update: if/);
+  assert.match(
+    block,
+    /request\.resource\.data\.careRecipientId\s*==\s*resource\.data\.careRecipientId/,
+    'update 는 careRecipientId 재지정을 막아야 함',
+  );
+  assert.match(block, /hasOnly\(\[[^\]]*\]\)/, 'update 는 필드 화이트리스트(hasOnly) 여야 함');
+  assert.doesNotMatch(
+    /allow update:[\s\S]*?allow delete/.exec(block)?.[0] ?? block,
+    /'guardianUid'|'careRecipientId'/,
+    'guardianUid/careRecipientId 는 update 허용 필드 목록에 없어야 함',
+  );
+
+  assert.match(block, /allow delete: if false/, '앱이 delete 를 쓰지 않으므로 최소 권한(false) 이어야 함');
+});
+
+check('DEVELOPMENT ONLY 표기가 더 이상 남아있지 않다 (hardening 완료)', () => {
+  assert.ok(!/DEVELOPMENT ONLY/.test(raw));
 });
 
 console.log('firestore.rules static check');

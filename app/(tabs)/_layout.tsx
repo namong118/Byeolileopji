@@ -42,6 +42,9 @@ export default function TabsLayout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="construct-outline" color={color} size={size} />
           ),
+          // Phase 5 STEP 5.3-C — production 빌드에서는 탭 자체를 숨긴다.
+          // (developer.tsx 자체도 __DEV__ 가 아니면 <Redirect> 하므로 이중으로 차단된다.)
+          href: __DEV__ ? undefined : null,
         }}
       />
     </Tabs>

@@ -1,107 +1,146 @@
 rules_version = '2';
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  별일없지 — Firestore 보안 규칙  (Phase 2.5 + Phase 4.1a + Phase 4.1b)
+//  별일없지 — Firestore 보안 규칙  (Phase 5 STEP 5.3-D — Rules hardening)
 //
-//  ⚠️  DEVELOPMENT ONLY — NOT FOR PRODUCTION
+//  ⚠️  이 규칙은 아직 production 에 배포되지 않았다. 로컬/에뮬레이터 검증 전용.
 //
-//  아직 Firebase Auth 를 구현하지 않았다. 이 규칙은 인증 없는 PoC 앱/Worker 가
-//  동작하도록 열어둔 상태다.
-//  - 전체 DB 와일드카드(`match /{document=**}`) 는 쓰지 않는다.
-//  - 필요한 3개 컬렉션에만 범위를 제한한다.
+//  핵심 모델:
+//    Firebase Auth (request.auth.uid)
+//         ↓
+//    guardianLinks/{uid}_{careRecipientId}   (guardianUid, careRecipientId, enabled)
+//         ↓  isGuardianOf(careRecipientId)
+//    careRecipients / careStatus / events / devices / pushTokens
 //
-//  Phase 4.4(인증 도입) 에서 아래처럼 좁힌다:
-//    allow read:  if isLinkedGuardian(resource.data.careRecipientId);
-//    allow write: if false;   // 쓰기는 서버(service-account 인증)만
+//  - 로그인하지 않은 요청은 전부 거부된다.
+//  - 로그인했어도 guardianLinks 로 연결(그리고 enabled=true)되지 않은 대상의
+//    데이터는 읽을 수 없다.
+//  - events / careStatus / devices 는 client 가 create/update/delete 할 수 없다
+//    (Cloudflare Worker 가 service-account OAuth2 Bearer 로 직접 Firestore REST 를
+//    호출한다 — Phase 5.3-A/B. OAuth 인증 요청은 이 Rules 를 완전히 우회하는
+//    Admin 경로이므로, 아래 client 전용 `false` 들은 Worker 동작에 전혀 영향을
+//    주지 않는다).
+//  - guardianLinks 문서는 Firebase Console 에서 수동 생성한다 — 앱은 절대
+//    생성/수정/삭제하지 않는다.
+//  - pushTokens 는 로그인한 guardian 이 "자기 자신의" 토큰만, 그리고 그 토큰이
+//    가리키는 careRecipient 에 실제로(enabled 상태로) 연결돼 있을 때만 다룰 수 있다.
+//
+//  전체 DB 와일드카드(`match /{document=**}`) 는 쓰지 않는다 — 필요한 컬렉션에만
+//  범위를 제한한다.
 // ═══════════════════════════════════════════════════════════════════════════
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 생활 이벤트 — 앱/Worker 가 생성/조회.
-    match /events/{eventId} {
-      allow read: if true;   // DEVELOPMENT ONLY
-      allow create: if true; // DEVELOPMENT ONLY
-      allow update, delete: if false;
+    // ── 공통 helper ────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    // 보호대상 — 조회만.
-    match /careRecipients/{careRecipientId} {
-      allow read: if true;   // DEVELOPMENT ONLY
-      allow write: if false;
+    // guardianLinks/{uid}_{careRecipientId} 문서가 존재하고 enabled == true 일 때만
+    // 그 guardian 이 해당 careRecipient 의 데이터에 접근할 수 있다고 본다.
+    // 문서 id 가 `{guardianUid}_{careRecipientId}` 로 deterministic 하므로 단일
+    // get() 하나로 끝난다(쿼리 없음, exists()+get() 은 같은 경로라 추가 read 비용이
+    // 들지 않는다 — Firestore 가 동일 문서에 대한 반복 접근을 중복 계산하지 않는다).
+    // 단순 exists() 만 쓰지 않는 이유: enabled=false 로 바뀐 링크도 문서 자체는
+    // 계속 존재하므로, exists() 만으로는 연결 해제 이후에도 접근 권한이 남는다.
+    function isGuardianOf(careRecipientId) {
+      let linkPath = /databases/$(database)/documents/guardianLinks/$(request.auth.uid + '_' + careRecipientId);
+      return isSignedIn()
+             && exists(linkPath)
+             && get(linkPath).data.enabled == true;
     }
 
-    // 서버 계산 careStatus 스냅샷 (Phase 4.3 STEP B-2) — **파생 데이터**.
-    //   ⚠️ DEVELOPMENT ONLY.
-    //   Cloudflare Worker(무인증)가 careStatus/{careRecipientId} 문서를 상태 판정
-    //   결과로 덮어쓴다. 대상자당 문서 1개(문서 id = careRecipientId), event history 아님.
-    //   raw 데이터(events / devices)와 분리된 컬렉션이다.
-    //   앱은 조회만 한다 (서버 계산 상태 표시는 STEP B-3 이후).
-    //   실제 버전(Phase 4.4)에서는 Worker 가 service-account 인증 →
-    //     allow read:  if isLinkedGuardian(resource.data.careRecipientId);
-    //     allow write: if false;   // write 는 서버만
-    //   로 좁힌다.
-    match /careStatus/{careRecipientId} {
-      allow read: if true;            // DEVELOPMENT ONLY
-      allow create, update: if true;  // DEVELOPMENT ONLY — 서버(Worker) 계산 결과 write
-      allow delete: if false;
+    // pushTokens 문서가 갖춰야 할 최소 필드 형태.
+    function validPushTokenFields(data) {
+      return data.keys().hasAll(['token', 'platform', 'guardianUid', 'careRecipientId', 'enabled'])
+             && data.token is string && data.token.size() > 0
+             && data.platform is string
+             && data.guardianUid is string && data.guardianUid.size() > 0
+             && data.careRecipientId is string && data.careRecipientId.size() > 0
+             && data.enabled is bool;
     }
 
-    // 보호자 푸시 토큰 (Phase 4.4 STEP 1) — FCM 전송 대상.
-    //   ⚠️ DEVELOPMENT ONLY.
-    //   Firebase Auth / guardian 관계 모델 도입 전이라, 앱(무인증)이 자기 기기의
-    //   FCM registration token 을 등록하고, Cloudflare Worker(무인증)가 조회한다.
-    //   문서: { token, platform, careRecipientId, enabled, createdAt, updatedAt }
-    //   실제 버전(Phase 4.4 Auth)에서는:
-    //     allow read:   if false;   // 조회는 서버(service-account)만
-    //     allow create, update: if request.auth.uid == request.resource.data.guardianUid
-    //                              && isLinkedGuardian(request.resource.data.careRecipientId);
-    //     allow delete: if request.auth.uid == resource.data.guardianUid;
-    match /pushTokens/{tokenId} {
-      allow read: if true;    // DEVELOPMENT ONLY — Worker 조회
-      allow create: if true;  // DEVELOPMENT ONLY — 앱 토큰 등록
-
-      // 갱신은 토큰/플랫폼/활성플래그/시각만. careRecipientId / createdAt 재지정 불가.
-      //   - token / platform / updatedAt : 앱이 토큰 회전 시
-      //   - enabled / updatedAt          : Worker 가 invalid token 비활성화 시
-      allow update: if request.resource.data
-                        .diff(resource.data)
-                        .affectedKeys()
-                        .hasOnly(['token', 'platform', 'enabled', 'updatedAt']);
-
-      allow delete: if false;
-    }
-
-    // Guardian ↔ CareRecipient 관계 (Phase 5 STEP 5.2).
-    //   문서 id = `{guardianUid}_{careRecipientId}` (deterministic composite, 앱은 만들지 않는다).
-    //   앱은 discovery 를 위해 `guardianUid == 로그인 uid` 로 쿼리한다 — 이 규칙은
-    //   그 쿼리가 반환하는 각 문서에 대해 "자기 문서인가" 만 검증한다(Firestore 는
-    //   쿼리 자체의 필터가 아니라 결과로 오는 각 문서에 이 규칙을 적용한다).
-    //   문서는 Firebase Console 에서 수동 생성한다(STEP 5.2) — 앱은 생성/수정/삭제하지 않는다.
+    // ── Guardian ↔ CareRecipient 관계 ────────────────────────────────────
+    //   문서 id = `{guardianUid}_{careRecipientId}` (deterministic composite).
+    //   앱은 discovery 를 위해 `guardianUid == 로그인 uid` 로 쿼리한다.
+    //   자기 링크는 enabled 여부와 무관하게 read 허용 — 앱이 "연결 해제됨" 상태를
+    //   직접 감지해서 "연결된 돌봄 대상이 없습니다" 화면을 보여줘야 하기 때문이다
+    //   (isGuardianOf() 로 막아버리면 그 감지 자체가 불가능해진다).
+    //   문서는 Firebase Console 에서 수동 생성한다 — 앱은 생성/수정/삭제하지 않는다.
     match /guardianLinks/{linkId} {
-      allow read: if request.auth != null
-                  && request.auth.uid == resource.data.guardianUid;
-
+      allow read: if isSignedIn() && request.auth.uid == resource.data.guardianUid;
       allow create, update, delete: if false;
     }
 
-    // 디바이스 레지스트리.
+    // ── 생활 이벤트 ──────────────────────────────────────────────────────
+    //   read: 연결된(enabled) guardian 만. 쿼리는 항상 careRecipientId 로 필터되어
+    //   있어야 한다(FirestoreEventRepository.buildQuery() 가 이미 그렇게 한다).
+    //   write: client 전부 금지 — 실제 센서 이벤트는 Worker ingest 전용
+    //   (/ingest-device-event, service-account OAuth). Developer Simulation 은
+    //   InMemory 전용이라 애초에 이 컬렉션에 도달하지 않는다(Phase 5.3-C).
+    match /events/{eventId} {
+      allow read: if isGuardianOf(resource.data.careRecipientId);
+      allow create, update, delete: if false;
+    }
+
+    // ── 보호대상 ─────────────────────────────────────────────────────────
+    //   문서 id 자체가 careRecipientId.
+    match /careRecipients/{careRecipientId} {
+      allow read: if isGuardianOf(careRecipientId);
+      allow create, update, delete: if false;
+    }
+
+    // ── 서버 계산 careStatus 스냅샷 (파생 데이터) ───────────────────────
+    //   문서 id 자체가 careRecipientId. Worker(scheduled())가 상태 판정 결과로
+    //   전체 replace 한다 — client 는 read 만.
+    match /careStatus/{careRecipientId} {
+      allow read: if isGuardianOf(careRecipientId);
+      allow create, update, delete: if false;
+    }
+
+    // ── 디바이스 레지스트리 ──────────────────────────────────────────────
+    //   문서 id 는 deviceId, careRecipientId 는 필드로 존재한다.
+    //   write: client 전부 금지 — lastEventAt/lastHeartbeatAt 갱신은 Worker
+    //   (/ingest-device-event, /device-heartbeat) 가 service-account OAuth 로 한다.
     match /devices/{deviceId} {
-      allow read: if true;   // DEVELOPMENT ONLY
+      allow read: if isGuardianOf(resource.data.careRecipientId);
+      allow create, update, delete: if false;
+    }
 
-      // Phase 4.1a/4.1b — Worker(무인증)가 lastEventAt / lastHeartbeatAt 만 갱신 허용.
-      //   ⚠️ DEVELOPMENT ONLY.
-      //   핵심 레지스트리 필드(careRecipientId / enabled / type / location / name)는
-      //   클라이언트가 변경할 수 없다. 오직 이 두 상태 필드만.
-      //     - lastEventAt      : /ingest-device-event 성공 시 (사람 활동 신호)
-      //     - lastHeartbeatAt  : /device-heartbeat 성공 시 (기기 생존 신호)
-      //   실제 버전에서는 Worker 가 service-account 인증 → 이 규칙을 제거하고 `if false`.
-      allow update: if request.resource.data
-                        .diff(resource.data)
-                        .affectedKeys()
-                        .hasOnly(['lastEventAt', 'lastHeartbeatAt']);
+    // ── 보호자 푸시 토큰 ─────────────────────────────────────────────────
+    //   문서: { token, platform, guardianUid, careRecipientId, enabled,
+    //           createdAt, updatedAt }.
+    //   read/create/update: 로그인한 본인(guardianUid == auth.uid) 소유 토큰만,
+    //   그리고 그 토큰이 가리키는 careRecipient 에 (enabled 상태로) 실제 연결돼
+    //   있을 때만. 조회는 원래 서버(Worker, service-account OAuth)가 하므로 이
+    //   read 규칙은 client(앱)가 자기 토큰 상태를 확인/재등록할 때만 쓰인다.
+    //   delete: 앱이 delete 를 전혀 쓰지 않는다(pushRegistration.ts 는 setDoc
+    //   merge 만) — 최소 권한 원칙으로 client delete 는 금지한다.
+    match /pushTokens/{tokenId} {
+      allow read: if isSignedIn()
+                  && resource.data.guardianUid == request.auth.uid
+                  && isGuardianOf(resource.data.careRecipientId);
 
-      allow create, delete: if false;
+      allow create: if isSignedIn()
+                    && request.resource.data.guardianUid == request.auth.uid
+                    && isGuardianOf(request.resource.data.careRecipientId)
+                    && validPushTokenFields(request.resource.data);
+
+      // 갱신은 토큰/플랫폼/활성플래그/시각만. guardianUid / careRecipientId 는
+      // 요청 값이 기존 값과 동일해야 한다(재지정 불가 — 소유자/대상 스푸핑 방지).
+      allow update: if isSignedIn()
+                    && resource.data.guardianUid == request.auth.uid
+                    && request.resource.data.guardianUid == request.auth.uid
+                    && request.resource.data.careRecipientId == resource.data.careRecipientId
+                    && isGuardianOf(resource.data.careRecipientId)
+                    && validPushTokenFields(request.resource.data)
+                    && request.resource.data
+                          .diff(resource.data)
+                          .affectedKeys()
+                          .hasOnly(['token', 'platform', 'enabled', 'updatedAt']);
+
+      allow delete: if false;
     }
   }
 }
