@@ -28,6 +28,6 @@ const styles = StyleSheet.create({
   },
   title: {
     ...typography.sectionTitle,
-    color: colors.textSecondary,
+    color: colors.textPrimary,
   },
 });

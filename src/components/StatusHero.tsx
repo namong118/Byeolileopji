@@ -73,7 +73,7 @@ export function StatusHero({
 
       <View style={styles.mainRow}>
         <View style={styles.iconBadge}>
-          <Ionicons name={style.icon} size={15} color={style.iconColor} />
+          <Ionicons name={style.icon} size={18} color={style.iconColor} />
         </View>
         <View style={styles.textCol}>
           <Text style={styles.headline}>{headline}</Text>
@@ -109,8 +109,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   iconBadge: {
-    width: 30,
-    height: 30,
+    width: 36,
+    height: 36,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',

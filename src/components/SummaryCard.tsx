@@ -40,7 +40,7 @@ export function SummaryCard({
   return (
     <View style={styles.card}>
       <View style={[styles.iconBadge, { backgroundColor: badge.bg }]}>
-        <Ionicons name={icon} size={13} color={badge.icon} />
+        <Ionicons name={icon} size={16} color={badge.icon} />
       </View>
       <Text style={styles.label} numberOfLines={1}>
         {label}
@@ -62,17 +62,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.surface,
     borderRadius: radius.md,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
     ...shadows.soft,
   },
   iconBadge: {
-    width: 23,
-    height: 23,
+    width: 32,
+    height: 32,
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 3,
+    marginBottom: 6,
   },
   label: {
     ...typography.caption,

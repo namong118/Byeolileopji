@@ -12,10 +12,11 @@ import {
 import { colors, radius, spacing, typography } from '../../src/constants/theme';
 import { useCareStore } from '../../src/stores/careStore';
 import { buildTodayActivitySummary } from '../../src/utils/todayActivity';
-import { formatKoreanDate } from '../../src/utils/time';
+import { formatKoreanDate, formatRelativeDetailed } from '../../src/utils/time';
 
 export default function TimelineScreen() {
   const todayEvents = useCareStore((s) => s.todayEvents);
+  const lastActivity = useCareStore((s) => s.lastActivity);
   const loading = useCareStore((s) => s.loading);
   const loadError = useCareStore((s) => s.loadError);
   const reload = useCareStore((s) => s.reload);
@@ -26,39 +27,36 @@ export default function TimelineScreen() {
     [todayEvents],
   );
   const hasEvents = todayEvents.length > 0;
+  const recentActivityValue = lastActivity
+    ? formatRelativeDetailed(lastActivity.occurredAt)
+    : '아직 없음';
 
   return (
     <ScreenScrollView>
       <Text style={styles.title}>오늘의 기록</Text>
+      <Text style={styles.dateText}>{today}</Text>
 
-      <View style={styles.datePill}>
-        <Ionicons name="calendar-outline" size={14} color={colors.textSecondary} />
-        <Text style={styles.datePillText}>{today}</Text>
-      </View>
-
-      {todayActivity.count > 0 ? (
-        <View style={styles.summaryPill}>
-          <View style={styles.summaryItem}>
-            <View style={[styles.summaryBadge, { backgroundColor: colors.mint }]}>
-              <Ionicons name="walk-outline" size={16} color={colors.green} />
-            </View>
-            <View>
-              <Text style={styles.summaryLabel}>오늘 활동</Text>
-              <Text style={styles.summaryValue}>{todayActivity.count}회</Text>
-            </View>
+      <View style={styles.summaryPill}>
+        <View style={styles.summaryItem}>
+          <View style={[styles.summaryBadge, { backgroundColor: colors.mint }]}>
+            <Ionicons name="walk-outline" size={16} color={colors.green} />
           </View>
-          <View style={styles.summaryDivider} />
-          <View style={styles.summaryItem}>
-            <View style={[styles.summaryBadge, { backgroundColor: colors.lightBlue }]}>
-              <Ionicons name="time-outline" size={16} color={colors.blue} />
-            </View>
-            <View>
-              <Text style={styles.summaryLabel}>최근 활동</Text>
-              <Text style={styles.summaryValue}>{todayActivity.lastAt}</Text>
-            </View>
+          <View>
+            <Text style={styles.summaryLabel}>오늘 활동</Text>
+            <Text style={styles.summaryValue}>{todayActivity.count}회</Text>
           </View>
         </View>
-      ) : null}
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryItem}>
+          <View style={[styles.summaryBadge, { backgroundColor: colors.lightBlue }]}>
+            <Ionicons name="time-outline" size={16} color={colors.blue} />
+          </View>
+          <View>
+            <Text style={styles.summaryLabel}>최근 활동</Text>
+            <Text style={styles.summaryValue}>{recentActivityValue}</Text>
+          </View>
+        </View>
+      </View>
 
       {loading && todayEvents.length === 0 ? (
         <View style={styles.notice}>
@@ -94,20 +92,10 @@ const styles = StyleSheet.create({
     ...typography.hero,
     color: colors.textPrimary,
   },
-  datePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: spacing.xs,
-    backgroundColor: colors.surface,
-    borderRadius: radius.pill,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    marginTop: spacing.sm,
-  },
-  datePillText: {
-    ...typography.caption,
+  dateText: {
+    ...typography.body,
     color: colors.textSecondary,
+    marginTop: spacing.xs,
   },
   summaryPill: {
     flexDirection: 'row',

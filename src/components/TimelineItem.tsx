@@ -57,7 +57,12 @@ export function TimelineItem({
       <View style={[styles.iconBadge, { backgroundColor: badge.bg }]}>
         <Ionicons name={badge.icon} size={15} color={badge.color} />
       </View>
-      <Text style={styles.message}>{message}</Text>
+      <View style={styles.textCol}>
+        <Text style={styles.message}>{message}</Text>
+        {event.location ? (
+          <Text style={styles.location}>{event.location}</Text>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -65,7 +70,7 @@ export function TimelineItem({
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacing.sm,
   },
   rowGap: {
@@ -78,6 +83,7 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     width: 64,
+    marginTop: 2,
   },
   iconBadge: {
     width: 30,
@@ -86,10 +92,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  textCol: {
+    flex: 1,
+  },
   message: {
     ...typography.body,
     fontFamily: fontFamily.medium,
     color: colors.textPrimary,
-    flex: 1,
+  },
+  location: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
 });

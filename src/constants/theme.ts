@@ -120,8 +120,8 @@ export const fontFamily = {
 } as const;
 
 export const typography = {
-  /** Page title (26~27 / Bold) — 타이트한 line-height로 정제된 인상 */
-  hero: { fontFamily: fontFamily.bold, fontSize: 26, lineHeight: 32, letterSpacing: -0.3 },
+  /** Page title (28 / Bold) — 타이트한 line-height로 정제된 인상 */
+  hero: { fontFamily: fontFamily.bold, fontSize: 28, lineHeight: 34, letterSpacing: -0.3 },
   /** Status headline (21~22 / SemiBold) — StatusHero 전용. Page title 과 무게가
    *  경쟁하지 않도록 Bold 가 아니라 SemiBold 을 쓴다. */
   statusHeadline: { fontFamily: fontFamily.semiBold, fontSize: 22, lineHeight: 28, letterSpacing: -0.1 },
