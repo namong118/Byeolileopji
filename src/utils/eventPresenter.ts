@@ -67,6 +67,32 @@ export function presentFirstActivityOfDay(): string {
   return '오늘 첫 활동이 확인됐어요.';
 }
 
+/**
+ * 타임라인 아이콘 선택을 위한 시각적 분류 (Phase 6) — 문구/판정 로직과 무관한
+ * **순수 표시 힌트**다. 실제 아이콘/색상 매핑은 컴포넌트(TimelineItem)가 한다.
+ *   - activity: 생활 움직임 신호 → 별 아이콘(브랜드 시그니처)
+ *   - attention: 확인이 필요한 신호(SOS, 복약 누락) → 주의 아이콘
+ *   - routine: 그 외 정기 신호 → 단순 점
+ */
+export type EventVisualCategory = 'activity' | 'attention' | 'routine';
+
+export function presentEventCategory(eventType: EventType): EventVisualCategory {
+  switch (eventType) {
+    case 'motion_detected':
+    case 'door_opened':
+    case 'left_home':
+    case 'returned_home':
+    case 'watch_activity':
+    case 'medication_taken':
+      return 'activity';
+    case 'sos_triggered':
+    case 'medication_missed':
+      return 'attention';
+    default:
+      return 'routine';
+  }
+}
+
 function exhaustiveFallback(_type: EventType): PresentedEvent {
   return { message: '활동이 확인됐어요.', shortMessage: '활동' };
 }

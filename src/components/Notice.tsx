@@ -18,7 +18,7 @@ export function Notice({ message, tone = 'info' }: NoticeProps) {
         styles.box,
         {
           backgroundColor: isError
-            ? colors.status.CHECK.bg
+            ? colors.status.EMERGENCY.bg
             : colors.surfaceMuted,
         },
       ]}
@@ -26,7 +26,9 @@ export function Notice({ message, tone = 'info' }: NoticeProps) {
       <Text
         style={[
           styles.text,
-          { color: isError ? colors.status.CHECK.fg : colors.textSecondary },
+          {
+            color: isError ? colors.status.EMERGENCY.fg : colors.textSecondary,
+          },
         ]}
       >
         {message}

@@ -17,7 +17,10 @@ export function ScreenScrollView({ children }: ScreenScrollViewProps) {
       style={styles.scroll}
       contentContainerStyle={[
         styles.content,
-        { paddingBottom: insets.bottom + spacing.xxl },
+        {
+          paddingTop: insets.top + spacing.sm,
+          paddingBottom: insets.bottom + spacing.xxl,
+        },
       ]}
       showsVerticalScrollIndicator={false}
     >
@@ -32,7 +35,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   content: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingHorizontal: spacing.screen,
   },
 });

@@ -1,8 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PressableButton } from '../src/components';
-import { brand } from '../src/constants/strings';
+import { BrandMark, PressableButton } from '../src/components';
 import { colors, spacing, typography } from '../src/constants/theme';
 import { useAuthStore } from '../src/stores/authStore';
 
@@ -17,10 +16,10 @@ export default function NoRecipientScreen() {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + spacing.xxl }]}>
-      <Text style={styles.brand}>{brand.name}</Text>
-      <Text style={styles.message}>연결된 돌봄 대상이 없습니다.</Text>
+      <BrandMark size={48} />
+      <Text style={styles.message}>연결된 가족이 없어요</Text>
       <Text style={styles.hint}>
-        이 계정에 연결된 돌봄 대상이 아직 없어요. 관리자에게 문의해 주세요.
+        보호할 가족이 연결되면{'\n'}이곳에서 하루의 안부를 확인할 수 있어요.
       </Text>
       <PressableButton
         label="로그아웃"
@@ -35,19 +34,13 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.screen,
     alignItems: 'center',
   },
-  brand: {
-    ...typography.caption,
-    color: colors.accent,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
   message: {
-    ...typography.title,
+    ...typography.hero,
     color: colors.textPrimary,
-    marginTop: spacing.xxl,
+    marginTop: spacing.xl,
     textAlign: 'center',
   },
   hint: {

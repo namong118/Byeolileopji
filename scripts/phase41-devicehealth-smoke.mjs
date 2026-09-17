@@ -117,7 +117,7 @@ check('6. 사람 NORMAL(recent) + device offline → neutral Hero, "오늘도 �
   const t = presentHome(personStatus(), 'offline', NOW);
   assert.notEqual(t.headline, '오늘도 별일 없어요');
   assert.equal(t.tone, 'neutral');
-  assert.equal(t.headline, '센서 연결을 확인하고 있어요');
+  assert.equal(t.headline, '기기 연결을 확인하고 있어요');
   assert.ok(!/별일 없|활동이 확인됐어요/.test(t.headline + t.detail));
 });
 
@@ -179,7 +179,7 @@ check('10. 사람 CHECK(inactivity) + device online → "한번 확인해 주세
   );
   assert.equal(t.tone, 'check');
   assert.equal(t.headline, '한번 확인해 주세요');
-  assert.notEqual(t.headline, '센서 연결을 확인하고 있어요');
+  assert.notEqual(t.headline, '기기 연결을 확인하고 있어요');
 });
 
 check('10b. deriveDeviceHealth: lastEventAt 신선 + heartbeat 없음 → 여전히 unknown', () => {

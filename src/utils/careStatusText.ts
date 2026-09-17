@@ -148,10 +148,10 @@ export function presentHome(
     return {
       tone: 'neutral',
       emoji: '⚪',
-      headline: '센서 연결을 확인하고 있어요',
+      headline: '기기 연결을 확인하고 있어요',
       detail: careStatus.lastActivityAt
         ? `마지막 활동은 ${relative(careStatus.lastActivityAt, now)}에 있었어요.`
-        : '센서 연결이 확인되면 활동 정보를 다시 보여드릴게요.',
+        : '기기 연결이 확인되면 활동 정보를 다시 보여드릴게요.',
     };
   }
 

@@ -14,9 +14,8 @@
       "package": "com.byeolileopji.app",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FFF9EE",
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
@@ -27,7 +26,16 @@
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFF9EE",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 170,
+          "resizeMode": "contain"
+        }
+      ]
     ]
   }
 }

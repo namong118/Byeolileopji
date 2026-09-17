@@ -1,8 +1,9 @@
 import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
-import { colors, spacing, typography } from '../constants/theme';
+import { colors, fontFamily, radius, spacing, typography } from '../constants/theme';
 import type { CareEvent } from '../types/events';
-import { presentEvent } from '../utils/eventPresenter';
+import { presentEvent, presentEventCategory } from '../utils/eventPresenter';
 import { formatClock } from '../utils/time';
 
 interface TimelineItemProps {
@@ -14,6 +15,28 @@ interface TimelineItemProps {
   compact?: boolean;
 }
 
+type IoniconName = keyof typeof Ionicons.glyphMap;
+
+const CATEGORY_BADGE: Record<
+  ReturnType<typeof presentEventCategory>,
+  { icon: IoniconName; bg: string; color: string }
+> = {
+  // 생활 움직임 신호 — "한눈에 보기"의 최근 활동과 같은 Green 계열로 통일.
+  activity: { icon: 'walk-outline', bg: colors.mint, color: colors.green },
+  // 그 외 정기 신호 — 집 안에서의 신호이므로 "집 안 기기"와 같은 Blue 계열.
+  routine: { icon: 'home-outline', bg: colors.lightBlue, color: colors.blue },
+  // 확인이 필요한 신호(SOS, 복약 누락) — 상태색 CHECK(Amber)와 통일.
+  attention: {
+    icon: 'alert-circle',
+    bg: colors.status.CHECK.bg,
+    color: colors.status.CHECK.fg,
+  },
+};
+
+/**
+ * Timeline 한 줄 — "시간 | 컬러 아이콘 배지 | 자연어 문장" 구조.
+ * rail(세로 연결선) 없음 — 센서 로그가 아니라 하루의 기록처럼 깔끔한 리스트로 보인다.
+ */
 export function TimelineItem({
   event,
   overrideMessage,
@@ -21,23 +44,20 @@ export function TimelineItem({
   compact,
 }: TimelineItemProps) {
   const message = overrideMessage ?? presentEvent(event).message;
+  const badge = CATEGORY_BADGE[presentEventCategory(event.eventType)];
 
   return (
-    <View style={styles.row}>
-      <View style={styles.railColumn}>
-        <View style={styles.dot} />
-        {!last ? <View style={styles.line} /> : null}
+    <View
+      style={[
+        styles.row,
+        !last && (compact ? styles.rowGapCompact : styles.rowGap),
+      ]}
+    >
+      <Text style={styles.time}>{formatClock(event.occurredAt)}</Text>
+      <View style={[styles.iconBadge, { backgroundColor: badge.bg }]}>
+        <Ionicons name={badge.icon} size={15} color={badge.color} />
       </View>
-      <View
-        style={[
-          styles.content,
-          compact && styles.contentCompact,
-          last && styles.contentLast,
-        ]}
-      >
-        <Text style={styles.time}>{formatClock(event.occurredAt)}</Text>
-        <Text style={styles.message}>{message}</Text>
-      </View>
+      <Text style={styles.message}>{message}</Text>
     </View>
   );
 }
@@ -45,42 +65,31 @@ export function TimelineItem({
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
-  },
-  railColumn: {
     alignItems: 'center',
-    width: 24,
+    gap: spacing.sm,
   },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.accent,
-    marginTop: 6,
+  rowGap: {
+    marginBottom: spacing.lg,
   },
-  line: {
-    flex: 1,
-    width: 2,
-    backgroundColor: colors.border,
-    marginVertical: 4,
-  },
-  content: {
-    flex: 1,
-    paddingBottom: spacing.xl,
-    marginLeft: spacing.md,
-  },
-  contentCompact: {
-    paddingBottom: spacing.md,
-  },
-  contentLast: {
-    paddingBottom: 0,
+  rowGapCompact: {
+    marginBottom: spacing.md,
   },
   time: {
     ...typography.caption,
     color: colors.textSecondary,
-    marginBottom: 2,
+    width: 64,
+  },
+  iconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   message: {
     ...typography.body,
+    fontFamily: fontFamily.medium,
     color: colors.textPrimary,
+    flex: 1,
   },
 });

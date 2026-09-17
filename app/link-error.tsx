@@ -1,8 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PressableButton } from '../src/components';
-import { brand } from '../src/constants/strings';
+import { BrandMark, PressableButton } from '../src/components';
 import { colors, spacing, typography } from '../src/constants/theme';
 import { useAuthStore } from '../src/stores/authStore';
 import { useGuardianStore } from '../src/stores/guardianStore';
@@ -16,14 +15,13 @@ export default function LinkErrorScreen() {
   const insets = useSafeAreaInsets();
   const user = useAuthStore((s) => s.user);
   const signOutUser = useAuthStore((s) => s.signOutUser);
-  const linkError = useGuardianStore((s) => s.linkError);
   const resolveLink = useGuardianStore((s) => s.resolveLink);
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + spacing.xxl }]}>
-      <Text style={styles.brand}>{brand.name}</Text>
-      <Text style={styles.message}>연결 정보를 불러오지 못했습니다.</Text>
-      {linkError ? <Text style={styles.hint}>{linkError}</Text> : null}
+      <BrandMark size={48} />
+      <Text style={styles.message}>연결 정보를 확인할 수 없어요</Text>
+      <Text style={styles.hint}>잠시 후 다시 시도해 주세요.</Text>
 
       <PressableButton
         label="다시 시도"
@@ -46,19 +44,13 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.screen,
     alignItems: 'center',
   },
-  brand: {
-    ...typography.caption,
-    color: colors.accent,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
   message: {
-    ...typography.title,
+    ...typography.hero,
     color: colors.textPrimary,
-    marginTop: spacing.xxl,
+    marginTop: spacing.xl,
     textAlign: 'center',
   },
   hint: {

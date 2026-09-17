@@ -1,17 +1,36 @@
-import { useEffect } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Stack } from 'expo-router';
+import { useFonts } from 'expo-font';
+import * as SplashScreen from 'expo-splash-screen';
 
-import { colors } from '../src/constants/theme';
+import { colors, spacing, typography } from '../src/constants/theme';
 import { useCareStore } from '../src/stores/careStore';
 import { useAuthStore } from '../src/stores/authStore';
 import { useGuardianStore } from '../src/stores/guardianStore';
 import { registerForCareStatusPush } from '../src/services/pushRegistration';
 
+void SplashScreen.preventAutoHideAsync();
+
 export default function RootLayout() {
+  // 앱 전체 타이포그래피를 Pretendard로 통일 — 로딩 전에는 스플래시를 유지해
+  // 시스템 기본 폰트(Roboto 등)가 잠깐 노출되는 FOUT을 막는다.
+  const [fontsLoaded, fontError] = useFonts({
+    'Pretendard-Regular': require('../assets/fonts/Pretendard-Regular.ttf'),
+    'Pretendard-Medium': require('../assets/fonts/Pretendard-Medium.ttf'),
+    'Pretendard-SemiBold': require('../assets/fonts/Pretendard-SemiBold.ttf'),
+    'Pretendard-Bold': require('../assets/fonts/Pretendard-Bold.ttf'),
+  });
+
+  const onRootLayout = useCallback(() => {
+    if (fontsLoaded || fontError) {
+      void SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded, fontError]);
+
   const initAuth = useAuthStore((s) => s.init);
   const teardownAuth = useAuthStore((s) => s.teardown);
   const user = useAuthStore((s) => s.user);
@@ -61,8 +80,14 @@ export default function RootLayout() {
 
   const showLoadingOverlay = authLoading || (Boolean(user) && linkLoading);
 
+  if (!fontsLoaded && !fontError) {
+    // Pretendard 로딩 전에는 아무것도 그리지 않는다 — 스플래시 화면이 계속
+    // 떠 있는 동안 시스템 기본 폰트가 잠깐 노출되는 것을 막는다.
+    return null;
+  }
+
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1 }} onLayout={onRootLayout}>
       <SafeAreaProvider>
         <StatusBar style="dark" />
         <Stack
@@ -109,6 +134,7 @@ export default function RootLayout() {
         {showLoadingOverlay ? (
           <View style={[StyleSheet.absoluteFill, styles.loading]}>
             <ActivityIndicator color={colors.accent} />
+            <Text style={styles.loadingText}>정보를 확인하고 있어요</Text>
           </View>
         ) : null}
       </SafeAreaProvider>
@@ -121,5 +147,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.background,
+    gap: spacing.md,
+  },
+  loadingText: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
 });

@@ -93,7 +93,9 @@ export const useGuardianStore = create<GuardianState>((set) => ({
       set({
         careRecipientId: null,
         linkLoading: false,
-        linkError: `연결 정보를 불러오지 못했어요. (code=${code}) 네트워크 연결을 확인하고 다시 시도해 주세요.`,
+        // 사용자에게는 기술 코드(permission-denied 등)를 노출하지 않는다 —
+        // 위 __DEV__ 로그에는 code 가 그대로 남아 디버깅에 쓸 수 있다.
+        linkError: '연결 정보를 불러오지 못했어요. 네트워크 연결을 확인하고 다시 시도해 주세요.',
       });
     }
   },

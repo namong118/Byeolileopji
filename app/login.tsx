@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Notice, PressableButton } from '../src/components';
+import { BrandMark, Notice, PressableButton } from '../src/components';
 import { brand } from '../src/constants/strings';
 import { colors, radius, spacing, typography } from '../src/constants/theme';
 import { useAuthStore } from '../src/stores/authStore';
@@ -26,8 +26,11 @@ export default function LoginScreen() {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + spacing.xxl }]}>
-      <Text style={styles.brand}>{brand.name}</Text>
-      <Text style={styles.subtitle}>보호자 계정으로 로그인해 주세요.</Text>
+      <View style={styles.brandBlock}>
+        <BrandMark size={88} />
+        <Text style={styles.brand}>{brand.name}</Text>
+        <Text style={styles.message}>{brand.message}</Text>
+      </View>
 
       <View style={styles.form}>
         <TextInput
@@ -75,18 +78,22 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.screen,
+  },
+  brandBlock: {
+    alignItems: 'center',
   },
   brand: {
     ...typography.hero,
     color: colors.textPrimary,
     textAlign: 'center',
+    marginTop: spacing.lg,
   },
-  subtitle: {
+  message: {
     ...typography.body,
     color: colors.textSecondary,
     textAlign: 'center',
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
   },
   form: {
     marginTop: spacing.xxl,

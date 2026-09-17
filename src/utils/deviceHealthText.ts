@@ -39,3 +39,20 @@ export function presentSensorRow(
       return null;
   }
 }
+
+export interface DeviceSummaryCard {
+  value: string;
+  secondary?: string;
+}
+
+/**
+ * "한눈에 보기" 그리드의 "집 안 기기" 카드 전용 문구.
+ * offline/unknown 을 굳이 구분해 보여주지 않는다 — 둘 다 "연결 확인 중"으로 뭉뚱그려
+ * 차분하게 표현한다(기기 상태를 사람의 안부 위험처럼 보이지 않게 하기 위해서다).
+ */
+export function presentDeviceSummaryCard(
+  health: DeviceHealth,
+): DeviceSummaryCard {
+  if (health === 'online') return { value: '정상', secondary: '연결됨' };
+  return { value: '연결 확인 중', secondary: '확인 필요' };
+}

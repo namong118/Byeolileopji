@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
-import { colors, spacing, typography } from '../constants/theme';
+import { colors, radius, spacing, typography } from '../constants/theme';
 import type { CareEvent } from '../types/events';
 import { presentFirstActivityOfDay } from '../utils/eventPresenter';
 import { TimelineItem } from './TimelineItem';
@@ -23,9 +24,15 @@ export function TimelineList({
 }: TimelineListProps) {
   if (events.length === 0) {
     return (
-      <Text style={styles.empty}>
-        아직 오늘 기록이 없어요.{'\n'}활동이 확인되면 이곳에 표시됩니다.
-      </Text>
+      <View style={styles.empty}>
+        <View style={styles.emptyIconBadge}>
+          <Ionicons name="document-text-outline" size={18} color={colors.blue} />
+        </View>
+        <View style={styles.emptyTextCol}>
+          <Text style={styles.emptyTitle}>아직 오늘 기록이 없어요.</Text>
+          <Text style={styles.emptySubtitle}>활동이 확인되면 이곳에 표시됩니다.</Text>
+        </View>
+      </View>
     );
   }
 
@@ -60,8 +67,29 @@ export function TimelineList({
 
 const styles = StyleSheet.create({
   empty: {
-    ...typography.body,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  emptyIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.lightBlue,
+  },
+  emptyTextCol: {
+    flex: 1,
+  },
+  emptyTitle: {
+    ...typography.bodyStrong,
+    color: colors.textPrimary,
+  },
+  emptySubtitle: {
+    ...typography.caption,
     color: colors.textSecondary,
-    paddingVertical: spacing.lg,
+    marginTop: 2,
   },
 });
