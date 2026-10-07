@@ -3,7 +3,9 @@ rules_version = '2';
 // ═══════════════════════════════════════════════════════════════════════════
 //  별일없지 — Firestore 보안 규칙  (Phase 5 STEP 5.3-D — Rules hardening)
 //
-//  ⚠️  이 규칙은 아직 production 에 배포되지 않았다. 로컬/에뮬레이터 검증 전용.
+//  2026-09-12 20:40 (KST) production 게시 (커밋 d20b68a 직후). 이후 이 파일과 운영 규칙 모두
+//  변경 없음 — 근거는 Console 게시 시각과 커밋 시각의 일치이며, Console 본문과 이 파일의 전체
+//  대조는 하지 않았다 (docs/BUILD_LOG.md "운영 배포 기록 (2026-10-07)").
 //
 //  핵심 모델:
 //    Firebase Auth (request.auth.uid)

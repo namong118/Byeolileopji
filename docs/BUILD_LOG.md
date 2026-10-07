@@ -93,18 +93,37 @@ Phase 4.3  ✅  Cloudflare cron + 서버측 상태 판정 (careStatus 문서) �
                       ✅ production Worker deploy(`817c1165…`) · `firestore.rules` 게시 ·
                       scheduled 강제 실행 Firestore E2E · **production Cron 자동 invocation 검증 완료**
                       (2026-09-09 수동 실행 없이 `computedAt` 이 10분 경계 직후 자동 갱신 관측)
-Phase 4.4  ⏳  FCM 푸시 + Firebase Auth + Firestore rules 좁히기
+Phase 4.4  🟡  FCM 전환 알림 (Firebase Auth / rules 좁히기는 Phase 5 로 진행)
               ├─ ✅  STEP 0 — production 실제 전환 검증 (실기기 ESP32-S3 + HC-SR501, 실제 Cron)
               │       임시 threshold(2/3) 1회 배포·관측·즉시 원복. 3개 Cron 경계에서
               │       CHECK→NORMAL / NORMAL→CHECK, offline→online / online→offline 를
               │       `wrangler tail` 로그 + Firestore `careStatus` 양쪽에서 관측. 아래 절 참고.
-              └─ ✅  STEP 1 — FCM 전환 알림 파이프라인 (구조 + 테스트, **실기기 수신 미검증**)
-                      전환 → `deriveTransitionNotifications`(순수 정책, 0/1개) → guardian
-                      pushToken 조회 → FCM HTTP v1 sender(Web Crypto RS256 JWT) → 전송.
-                      **snapshot WRITE 성공 후에만**, notifier 는 **절대 throw 안 함**(Cron 안전).
-                      kill-switch `FCM_NOTIFICATIONS_ENABLED=false` — service account secret +
-                      실기기 수신 검증 전까지 production 알림 OFF. 스모크 50건. 아래 절 참고.
-Phase 5    ⏳  복약 관리 + 스마트워치 Mock 통합
+              ├─ ✅  STEP 1 — FCM 전환 알림 파이프라인 (구조 + 테스트, 스모크 50건)
+              │       전환 → `deriveTransitionNotifications`(순수 정책, 0/1개) → guardian
+              │       pushToken 조회 → FCM HTTP v1 sender(Web Crypto RS256 JWT) → 전송.
+              │       **snapshot WRITE 성공 후에만**, notifier 는 **절대 throw 안 함**(Cron 안전).
+              │       (작성 당시 "실기기 수신 미검증" — 아래 후속 검증으로 갱신)
+              ├─ ✅  Android 실기기 FCM 수신 — 복귀 전환(CHECK→NORMAL), CHECK+기기 offline 동시
+              │       전환에서 단일 알림 수신 확인 ("Follow-up Verification — Android FCM E2E" 절.
+              │       정확한 검증 일시는 기록 없음)
+              ├─ ⚠️  EMERGENCY 전환 알림 실기기 수신은 미검증 (SOS 경로는 자동 테스트만)
+              └─ ⏳  SOS ingest → 즉시 EMERGENCY 판정/알림 경로 미구현 (현재는 10분 Cron 경유)
+Phase 5    🟡  보호자 인증 + 관계 모델 + 데이터 접근 hardening (구현 완료 · 실기기 검증 기록 없음)
+              ├─ ✅  Firebase Guardian Auth 로그인 — 구현 (커밋 `1fec910`)
+              ├─ ✅  guardianLinks 관계 모델 (guardian ↔ careRecipient) — 구현 (커밋 `45123db`)
+              ├─ ✅  Worker → Firestore service-account OAuth (STEP 5.3-A/B) — 구현 + 스모크 (커밋 `acab8a5`)
+              ├─ ✅  Developer Simulation 을 InMemory 로 격리 (STEP 5.3-C) — 스모크 (커밋 `d20b68a`)
+              ├─ ✅  Firestore rules hardening (STEP 5.3-D, `isGuardianOf()` read / client write 금지, 커밋 `d20b68a`)
+              │       — 에뮬레이터 30 checks PASS (2026-10-07 재실행) · **2026-09-12 20:40 KST production
+              │       게시** (게시 시각 = 커밋 `d20b68a` 시각으로 판단, 본문 전체 대조 미실시)
+              └─ ⚠️  로그인 / 관계 해석 / 연결 해제 화면의 실기기 동작은 이 문서에 검증 기록이 없다
+Fix 2026-10 🟡  조회 창(최근 N건 vs 시간 기준) · 미등록 deviceType 차단 · 구독 최신성 표시
+              ├─ ✅  코드 + 테스트 — test:smoke 17개 스크립트 / 354 checks 실패 0, 에뮬레이터 30 PASS
+              ├─ ✅  2026-10-07 production 배포: Firestore 인덱스 (사용 설정됨 확인) + Worker
+              │       (Cron 실행 정상 확인) — "운영 배포 기록 (2026-10-07)" 절
+              ├─ ⏳  앱 새 빌드 미배포 (운영 중인 앱은 이전 버전)
+              └─ ⏳  운영 확인 체크리스트 7개 전부 미실시 (devices.type 확인 포함)
+다음       ⏳  복약 관리 + 스마트워치 Mock 통합 (README "Current Limitations" — 범위 밖)
 ```
 
 > **Phase 2 → 2.5 전환:** Supabase 연동 코드를 작성했으나 hosted 검증 전
@@ -1957,6 +1976,9 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
 - `occurredAt` 이 문자열로 저장된 레거시 events 문서가 있다면 today 범위 쿼리에서 빠지고,
   desc 정렬에서는 Timestamp 문서보다 앞에 온다(Firestore 타입 순서). Worker / 앱 경로는
   Timestamp 만 쓴다.
+- `presentStaleHome()` (`src/utils/careStatusText.ts`) 의 "…까지 확인한 정보예요" 는 **시각만**
+  표시한다 — 오프라인인 채로 날짜를 넘기면 "오후 9:10까지 확인한 정보예요" 가 어제인지 오늘인지
+  구분되지 않는다. (코드 미수정, 기록만)
 
 ### 운영 배포 체크리스트 (순서 중요)
 
@@ -2045,3 +2067,117 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
 - **미검증**: 실기기에서 기기 구독 오류 / 비행기 모드 시 카드·배너 표시와 복귀 후 자동 해제.
 - **남은 한계**: 개발자 탭의 기기 진단 행(derived health 등)은 원시 판정값을 그대로 보여준다
   (보호자 화면 아님, 의도적으로 유지).
+
+### 운영 배포 기록 (2026-10-07)
+
+> 아래 "확인함" 은 **사용자가 직접 확인한 사실만** 적었다. 확인하지 않은 것은 "확인 안 함 / 미실시" 로 둔다.
+
+**대상**: 커밋 `53ebdc2..2a78c55` (6개 — `756253c` `a075503` `e42401a` `011cf3f` `0427be9`
+`2a78c55`), `origin/main` push 완료.
+
+| 대상 | 명령 | 확인 방법 | 결과 |
+| --- | --- | --- | --- |
+| Firestore 인덱스 | `npx firebase-tools@13 deploy --only firestore:indexes --project byeolileopji` | Firebase Console → Firestore → 색인 탭 | `events (careRecipientId ↑, eventType ↑, occurredAt ↓)` **"사용 설정됨" 확인함** |
+| Cloudflare Worker | `npx wrangler deploy` | Cloudflare 대시보드 로그 | scheduled(Cron) 실행 **정상 확인함** |
+| `devices/dev-device-livingroom` 의 `type` / `enabled` | — | — | **확인 안 함** (아래 체크리스트 1) |
+| 보호자 앱 | — | — | **새 빌드 미배포.** 운영 중인 앱은 이전 버전 (2026-10 수정 미반영) |
+
+**Firestore 보안 규칙 운영 게시 상태 — 게시됨**
+
+- Console 규칙 탭의 마지막 게시 시각: **2026-09-12 20:40 (KST)**.
+- `firestore.rules` 의 마지막 변경 커밋 `d20b68a` ("feat: harden guardian data access",
+  2026-09-12 20:39:19 +0900) 직후 게시됐고, 이후 파일과 운영 규칙 모두 변경 없음.
+- **판단 근거는 게시 시각과 커밋 시각의 일치이며, Console 규칙 본문과 파일의 전체 대조는
+  미실시**다.
+- 파일 헤더 주석 "아직 production 에 배포되지 않았다" 는 게시 직전에 작성된 뒤 갱신되지 않은
+  것으로 판단해, 이번에 게시 상태로 고쳤다 (**주석만**, 규칙 본문 무변경).
+
+**운영 주의 (배포 상태에서 비롯됨)**
+
+- 이번 Worker 에는 커밋 `756253c` 가 들어 있다 → `devices/{id}.type` 이 없으면 PIR 이벤트가
+  **422 `device_missing_type`** 로 거부된다. 체크리스트 1 이 끝나기 전까지는 PIR 수신이
+  보장되지 않는다.
+- 운영 앱(이전 버전)은 여전히 최근 500건 단일 구독이다 — 앱 쪽 EMERGENCY 누락 / 오늘 통계 잘림 /
+  오프라인 표시 개선은 새 빌드 배포 전까지 사용자에게 적용되지 않는다. 서버 Cron 판정과 FCM
+  알림은 이번 Worker 기준으로 동작한다.
+- 레포의 `wrangler.toml` 은 `FCM_NOTIFICATIONS_ENABLED = "true"` 다 → 서버 전환이 생기면
+  **실제 푸시가 발송된다** (체크리스트 6, 7 참고).
+
+### 운영 확인 체크리스트 (2026-10-07 기준 전부 미실시)
+
+> 상태: ⏳ = 미실시. 실시하면 날짜와 결과를 항목 옆에 적는다. **아직 아무것도 PASS 가 아니다.**
+> 앱 쪽 시간 관련 표시는 빌드 시점 `.env` 의 `EXPO_PUBLIC_*` override(재계산 주기 등)에 따라
+> 달라질 수 있으니, 결과를 판단하기 전에 그 빌드의 값을 확인한다.
+
+**1. ⏳ devices 문서 확인** (가장 먼저)
+- 절차: Firebase Console → Firestore → `devices/dev-device-livingroom`.
+- 기대 결과: `type` = `"ESP32_PIR"` (**string**, 대소문자·공백까지 정확히), `enabled` = `true`
+  (**boolean**), `careRecipientId` = `"dev-care-recipient"` (string).
+- 실패 시 조치: 필드를 수정한다. 수정 전까지(Worker 배포 시각 이후) PIR 이벤트가
+  422 `device_missing_type` / `unsupported_device_type` 로 거부됐을 수 있으므로, 그 기간과
+  사실을 이 항목 옆에 기록한다 (거부된 이벤트는 복구되지 않는다).
+
+**2. ⏳ PIR 이벤트 수신**
+- 절차: 센서 앞에서 움직인다 (PIR 워밍업 ~60초 이후). Cloudflare 대시보드 로그(또는
+  `wrangler tail`)와 Firestore `events` 컬렉션을 본다.
+- 기대 결과: `events` 에 새 문서 (`eventType: "motion_detected"`, `occurredAt` Timestamp),
+  Worker 로그 `ingest created event … (motion_detected @ 거실)`, **422 없음**.
+- 실패 시 조치: 로그의 에러 코드를 확인한다. `device_missing_type` / `unsupported_device_type`
+  이면 1번으로 돌아가 문서를 고친다. 문서 문제가 아니고 즉시 복구가 필요하면
+  `npx wrangler rollback` 으로 이전 Worker 로 되돌린다 (되돌리면 type 누락 우회 차단과 최신 SOS
+  조회도 함께 빠진다 — 되돌린 사실을 기록).
+
+**3. ⏳ 앱 새 빌드 기본 표시**
+- 절차: 현재 `main` 으로 앱을 빌드해 실기기에 설치하고 로그인한다.
+- 기대 결과: 홈 "오늘의 안부" Hero / "한눈에 보기" 의 "오늘 활동 N회" / Timeline 이 정상 표시.
+  2번에서 만든 이벤트가 오늘 활동과 Timeline 에 반영된다. 로딩 에러 배너가 없다.
+- 실패 시 조치: "기록을 불러오지 못했어요" 가 뜨면 인덱스 상태(사용 설정됨)와 로그인 계정의
+  `guardianLinks` 연결(enabled)을 확인한다. 개발 빌드면 Metro 로그의
+  `[별일없지] Firestore 실시간 구독 오류 (recent|today|sos)` 로 어느 쿼리인지 확인한다.
+
+**4. ⏳ 오프라인 배너**
+- 절차: 앱 포그라운드 상태에서 비행기 모드를 켜고 3분가량 기다린 뒤, 비행기 모드를 끈다.
+- 기대 결과: 끊김 후 약 2~3분 안에 배너 "최신 정보를 불러오지 못했어요. 화면의 정보가 지금
+  상태와 다를 수 있어요." 가 뜨고, Hero 는 "오늘도 별일 없어요" 대신 중립 "최신 정보를 불러오지
+  못했어요" (EMERGENCY 였다면 EMERGENCY 유지 + 안내 문구), 기기 카드는 "연결 확인 중 / 최신 정보
+  없음". 네트워크가 돌아오면 **아무 조작 없이** 배너가 사라지고 원래 표시로 돌아온다.
+- 실패 시 조치: 배너가 뜨지 않으면 재계산 주기(`EXPO_PUBLIC_STATUS_RECOMPUTE_INTERVAL_MS`)와 SDK
+  의 오프라인 판정 지연을 고려해 2~3분 더 기다린다. 그래도 안 뜨거나, 복귀 후 사라지지 않으면
+  관찰 시간과 함께 결함으로 기록한다 (Timeline 의 "다시 불러오기" 로 수동 복구 가능한지도 기록).
+
+**5. ⏳ 자정 전환**
+- 절차: 앱을 백그라운드로 보낸 뒤, 폰 설정에서 자동 시간을 끄고 시각을 다음 날 00:05 이후로
+  바꾼 다음 앱으로 돌아온다. **확인 후 자동 시간을 반드시 다시 켠다** (기기 시각이 틀리면
+  Firebase 인증 / TLS 가 실패할 수 있다 — 그 경우 이 항목의 결과로 보지 않는다).
+- 기대 결과: 복귀 즉시(60초 타이머를 기다리지 않고) 홈 "오늘 활동" 이 0회로 초기화되고
+  Timeline 이 비어 있다. "마지막 활동" 은 전날 기록으로 유지된다. 전날 "N회 이상" 표시가 남지 않는다.
+- 실패 시 조치: 전날 값이 남으면 1분 이상 기다려 60초 타이머로는 바뀌는지 따로 기록한다
+  (AppState active 경로 실패와 구분하기 위해).
+
+**6. ⏳ 기기 끊김 표시**
+- 절차: ESP32 전원을 차단하고 25분(`DEVICE_OFFLINE_MINUTES`) 이상 기다린다. 앱은 켜 둔 채로 둔다.
+- 기대 결과: 앱이 "연결됨" 을 계속 보여주지 않는다 — 기기 카드 **"연결 확인 중 / 확인 필요"**
+  (코드상 offline 문구. "연결 끊김" 이라는 문구는 없다), Hero 는 EMERGENCY 가 아니면
+  "기기 연결을 확인하고 있어요". 서버는 다음 Cron(10분 주기)에서 online→offline 전환을 감지하고
+  "생활 센서를 확인해 주세요" 푸시를 보낸다 (FCM 활성 상태). 전원을 다시 넣으면 online 복귀 +
+  "생활 센서가 다시 연결됐어요" 푸시.
+- 실패 시 조치: 앱이 계속 "정상 / 연결됨" 이면 `devices/{id}.lastHeartbeatAt` 이 실제로 멈췄는지
+  Console 에서 확인하고, 멈췄는데도 표시가 그대로면 결함으로 기록한다.
+
+**7. ⏳ (선택) SOS 경로** — ⚠️ 실제 푸시가 발송되므로 **의도적으로**, 보호자에게 미리 알린 뒤 진행
+- 절차: Firebase Console → `events` 에 문서를 직접 추가한다: `careRecipientId` =
+  `"dev-care-recipient"` (string), `eventType` = `"sos_triggered"` (string), `source` =
+  `"system"`, `occurredAt` = **현재 시각, 타입 timestamp** (문자열로 넣지 않는다 — 정렬·범위
+  쿼리가 달라진다), `payload` = `{ test: true }`. 다음 Cron(최대 10분)을 기다린다.
+- 기대 결과: Worker 로그 `status=EMERGENCY … person=NORMAL->EMERGENCY` (또는 CHECK→EMERGENCY),
+  `careStatus/dev-care-recipient.status = EMERGENCY`, "긴급 확인이 필요해요" 푸시 수신.
+  새 빌드 앱이면 홈 Hero 도 EMERGENCY.
+- 테스트 후 정리 (ack): **서버에는 ack 저장소가 없다** — 서버 EMERGENCY 는 TTL(12시간)로만
+  만료된다. 앱 개발자 탭의 "긴급 해제 (ack)" 는 그 기기의 화면 표시만 바꾸고 서버 / 다른
+  보호자에게는 영향이 없다. 바로 끝내려면 추가한 테스트 문서를 Console 에서 **삭제**한다 →
+  다음 Cron 에서 EMERGENCY → NORMAL(또는 CHECK) 전환 → "활동이 다시 확인됐어요" 등 복귀 푸시가
+  한 번 더 발송된다. 삭제한 시각과 받은 알림을 기록한다.
+- 실패 시 조치: EMERGENCY 가 안 되면 로그의 `scheduled compute` 성공 여부, 문서의
+  `occurredAt` 타입(timestamp), `careRecipientId` 철자를 확인한다. `FAILED_PRECONDITION` 이면
+  인덱스 상태를 다시 본다. 푸시만 안 오면 `pushTokens` 문서의 `enabled` 와 notifier 로그
+  (`decided` / `sent` / `failed`)를 확인한다.
