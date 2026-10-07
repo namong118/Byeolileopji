@@ -122,7 +122,7 @@ Fix 2026-10 🟡  조회 창(최근 N건 vs 시간 기준) · 미등록 deviceTy
               ├─ ✅  2026-10-07 production 배포: Firestore 인덱스 (사용 설정됨 확인) + Worker
               │       (Cron 실행 정상 확인) — "운영 배포 기록 (2026-10-07)" 절
               ├─ ⏳  앱 새 빌드 미배포 (운영 중인 앱은 이전 버전)
-              └─ ⏳  운영 확인 체크리스트 7개 전부 미실시 (devices.type 확인 포함)
+              └─ 🟡  운영 확인 체크리스트: 1번(devices 문서) 확인 · 2–7번 미실시
 다음       ⏳  복약 관리 + 스마트워치 Mock 통합 (README "Current Limitations" — 범위 밖)
 ```
 
@@ -2079,7 +2079,7 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
 | --- | --- | --- | --- |
 | Firestore 인덱스 | `npx firebase-tools@13 deploy --only firestore:indexes --project byeolileopji` | Firebase Console → Firestore → 색인 탭 | `events (careRecipientId ↑, eventType ↑, occurredAt ↓)` **"사용 설정됨" 확인함** |
 | Cloudflare Worker | `npx wrangler deploy` | Cloudflare 대시보드 로그 | scheduled(Cron) 실행 **정상 확인함** |
-| `devices/dev-device-livingroom` 의 `type` / `enabled` | — | — | **확인 안 함** (아래 체크리스트 1) |
+| `devices/dev-device-livingroom` 의 `type` / `enabled` | — | — | 배포 시점에는 **확인 안 함** → 이후 2026-10-07 확인 (아래 체크리스트 1) |
 | 보호자 앱 | — | — | **새 빌드 미배포.** 운영 중인 앱은 이전 버전 (2026-10 수정 미반영) |
 
 **Firestore 보안 규칙 운영 게시 상태 — 게시됨**
@@ -2109,7 +2109,7 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
 > 앱 쪽 시간 관련 표시는 빌드 시점 `.env` 의 `EXPO_PUBLIC_*` override(재계산 주기 등)에 따라
 > 달라질 수 있으니, 결과를 판단하기 전에 그 빌드의 값을 확인한다.
 
-**1. ⏳ devices 문서 확인** (가장 먼저)
+**1. ✅ devices 문서 확인** (가장 먼저) — **2026-10-07 사용자 확인: 기대 결과대로** (Worker 배포 이후 확인 시점까지의 PIR 422 거부 여부는 별도로 확인하지 않음)
 - 절차: Firebase Console → Firestore → `devices/dev-device-livingroom`.
 - 기대 결과: `type` = `"ESP32_PIR"` (**string**, 대소문자·공백까지 정확히), `enabled` = `true`
   (**boolean**), `careRecipientId` = `"dev-care-recipient"` (string).
