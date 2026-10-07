@@ -83,14 +83,20 @@ export function validateDevice(device, eventType) {
     return fail(422, 'device_missing_careRecipientId');
   }
 
-  if (device.type != null) {
-    if (!ALLOWED_DEVICE_TYPES.includes(device.type)) {
-      return fail(422, 'unsupported_device_type');
-    }
-    const allowed = DEVICE_TYPE_EVENTS[device.type];
-    if (allowed && !allowed.includes(eventType)) {
-      return fail(422, 'event_type_not_allowed_for_device');
-    }
+  // type 누락/null/비문자열 → 거부. (과거엔 type 이 없으면 아래 디바이스별 제한 전체를
+  // 건너뛰어, 전역 화이트리스트의 모든 eventType(sos_triggered 포함)이 통과했다.)
+  if (typeof device.type !== 'string' || device.type.trim() === '') {
+    return fail(422, 'device_missing_type');
+  }
+  if (!ALLOWED_DEVICE_TYPES.includes(device.type)) {
+    return fail(422, 'unsupported_device_type');
+  }
+  // ALLOWED_DEVICE_TYPES 와 DEVICE_TYPE_EVENTS 가 어긋나도 "제한 없음"으로 통과시키지 않는다.
+  const allowed = Object.hasOwn(DEVICE_TYPE_EVENTS, device.type)
+    ? DEVICE_TYPE_EVENTS[device.type]
+    : undefined;
+  if (!allowed || !allowed.includes(eventType)) {
+    return fail(422, 'event_type_not_allowed_for_device');
   }
   return { ok: true };
 }

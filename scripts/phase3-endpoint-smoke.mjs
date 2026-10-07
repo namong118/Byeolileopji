@@ -153,6 +153,51 @@ check('validateDevice: PIR 인데 door_opened → 422', () => {
   );
 });
 
+// ── 미등록/누락 deviceType 우회 차단 ───────────────────────────────────
+//  과거: type 이 없으면 디바이스별 제한 전체를 건너뛰어 sos_triggered 까지 통과했다.
+const { type: _omitType, ...DEVICE_NO_TYPE } = DEVICE;
+
+check('validateDevice: type 필드 누락 → 422 device_missing_type', () => {
+  assert.deepEqual(validateDevice(DEVICE_NO_TYPE, 'motion_detected'), {
+    ok: false,
+    status: 422,
+    error: 'device_missing_type',
+  });
+});
+
+check('validateDevice: type 누락 + sos_triggered → 422 (전역 화이트리스트 우회 불가)', () => {
+  const r = validateDevice(DEVICE_NO_TYPE, 'sos_triggered');
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 422);
+  assert.equal(r.error, 'device_missing_type');
+});
+
+check('validateDevice: type null / 빈 문자열 / 비문자열 → 422 device_missing_type', () => {
+  for (const type of [null, '', '   ', 1, true, ['ESP32_PIR'], { v: 'ESP32_PIR' }]) {
+    const r = validateDevice({ ...DEVICE, type }, 'motion_detected');
+    assert.equal(r.status, 422, `type=${JSON.stringify(type)}`);
+    assert.equal(r.error, 'device_missing_type', `type=${JSON.stringify(type)}`);
+  }
+});
+
+check('validateDevice: 미등록 type 은 어떤 eventType 이든 422 unsupported_device_type', () => {
+  for (const eventType of ALLOWED_EVENT_TYPES) {
+    assert.equal(validateDevice({ ...DEVICE, type: 'NEST_CAM' }, eventType).error, 'unsupported_device_type');
+  }
+  // prototype 키도 등록된 type 으로 취급하지 않는다
+  for (const type of ['constructor', '__proto__', 'toString']) {
+    assert.equal(validateDevice({ ...DEVICE, type }, 'sos_triggered').status, 422);
+  }
+});
+
+check('validateDevice: 등록된 ESP32_PIR 는 motion_detected 만, 나머지 eventType 은 422', () => {
+  for (const eventType of ALLOWED_EVENT_TYPES) {
+    const r = validateDevice(DEVICE, eventType);
+    if (eventType === 'motion_detected') assert.deepEqual(r, { ok: true });
+    else assert.equal(r.error, 'event_type_not_allowed_for_device', eventType);
+  }
+});
+
 // ── buildEvent.js ──────────────────────────────────────────────────────
 check('buildEventDoc: 서버가 시간/source/location/payload 채움', () => {
   const now = new Date('2026-09-03T12:00:00.000Z');
@@ -232,7 +277,7 @@ check('worker index.js: 핸들러 export 정상', () => {
 //     POST /events         → 생성된 문서
 //     PATCH /devices/{id}?updateMask.fieldPaths=lastEventAt → lastEventAt touch
 //
-function mockFirestore({ failWrite = false, deviceMissing = false, deviceDisabled = false } = {}) {
+function mockFirestore({ failWrite = false, deviceMissing = false, deviceDisabled = false, omitDeviceType = false } = {}) {
   const calls = [];
   const original = globalThis.fetch;
   globalThis.fetch = async (url, opts = {}) => {
@@ -259,7 +304,7 @@ function mockFirestore({ failWrite = false, deviceMissing = false, deviceDisable
           fields: toFirestoreFields({
             careRecipientId: 'dev-care-recipient',
             name: '거실 센서',
-            type: 'ESP32_PIR',
+            ...(omitDeviceType ? {} : { type: 'ESP32_PIR' }),
             location: '거실',
             enabled: !deviceDisabled,
           }),
@@ -303,11 +348,11 @@ const WORKER_ENV = {
   FCM_CLIENT_EMAIL: 'sa@p.iam.gserviceaccount.com',
   FCM_PRIVATE_KEY: TEST_PRIV,
 };
-const ingestReq = () =>
+const ingestReq = (eventType = 'motion_detected') =>
   new Request('https://w.example/ingest-device-event', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-device-key': KEY },
-    body: JSON.stringify({ deviceId: 'dev-device-livingroom', eventType: 'motion_detected' }),
+    body: JSON.stringify({ deviceId: 'dev-device-livingroom', eventType }),
   });
 const heartbeatReq = (over = {}) =>
   new Request('https://w.example/device-heartbeat', {
@@ -344,6 +389,33 @@ check('4.1a: lastEventAt PATCH 실패해도 ingest 는 201 유지 (best-effort)'
     assert.equal(res.status, 201);
     assert.equal((await res.json()).ok, true);
     assert.ok(m.calls.some((c) => c.method === 'PATCH'));
+  } finally {
+    m.restore();
+  }
+});
+
+check('ingest: type 누락 디바이스 → 422 device_missing_type, events 생성/lastEventAt 갱신 없음', async () => {
+  for (const eventType of ['motion_detected', 'sos_triggered']) {
+    const m = mockFirestore({ omitDeviceType: true });
+    try {
+      const res = await workerHandler.fetch(ingestReq(eventType), WORKER_ENV);
+      assert.equal(res.status, 422, eventType);
+      assert.equal((await res.json()).error, 'device_missing_type', eventType);
+      assert.ok(!m.calls.some((c) => c.method === 'POST' && c.url.includes('/events')), 'events 생성 금지');
+      assert.ok(!m.calls.some((c) => c.method === 'PATCH'), 'lastEventAt 갱신 금지');
+    } finally {
+      m.restore();
+    }
+  }
+});
+
+check('ingest: 등록된 ESP32_PIR 의 sos_triggered → 422 event_type_not_allowed_for_device', async () => {
+  const m = mockFirestore();
+  try {
+    const res = await workerHandler.fetch(ingestReq('sos_triggered'), WORKER_ENV);
+    assert.equal(res.status, 422);
+    assert.equal((await res.json()).error, 'event_type_not_allowed_for_device');
+    assert.ok(!m.calls.some((c) => c.method === 'POST' && c.url.includes('/events')));
   } finally {
     m.restore();
   }
