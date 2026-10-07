@@ -21,6 +21,7 @@ import {
   InMemoryEventRepository,
   type EventRepository,
   type EventsListener,
+  type EventsMeta,
   type Unsubscribe,
 } from './eventRepository';
 import { getFirestoreDb } from '../lib/firebase';
@@ -57,6 +58,12 @@ export class EventService {
   /** 전체 이벤트 (최신 우선) */
   async getEvents(): Promise<CareEvent[]> {
     return this.repo.listEvents();
+  }
+
+  /** 전체 이벤트 + 조회 창 메타데이터 (오늘 이벤트 잘림 여부). */
+  async getEventsWithMeta(): Promise<{ events: CareEvent[]; meta: EventsMeta }> {
+    if (this.repo.listEventsWithMeta) return this.repo.listEventsWithMeta();
+    return { events: await this.repo.listEvents(), meta: { todayTruncated: false } };
   }
 
   /** 오늘(로컬 타임존 기준) 발생한 이벤트만 (최신 우선) */

@@ -19,22 +19,48 @@
  * ⚠️ 사람/기기 상태를 여기서 다시 계산하지 않는다. STEP A 공유 코어만 쓴다.
  */
 
-import { queryRecentEvents, readDeviceDoc } from './firestoreRead.js';
+import { queryLatestEventOfType, queryRecentEvents, readDeviceDoc } from './firestoreRead.js';
 import { normalizeCareStatusInput } from '../../../src/services/careStatusSnapshotInput.ts';
 import { computeCareStatusSnapshot } from '../../../src/services/careStatusSnapshot.ts';
 
-/** 상태 판정에 필요한 최소 데이터만 Firestore 에서 읽는다. WRITE 없음. */
+/** id 기준 중복 제거 병합 (id 없는 항목은 그대로 둔다). 순서는 normalize 가 다시 정렬한다. */
+export function mergeEventsById(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const e of list ?? []) {
+      if (e?.id) {
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+      }
+      out.push(e);
+    }
+  }
+  return out;
+}
+
+/**
+ * 상태 판정에 필요한 최소 데이터만 Firestore 에서 읽는다. WRITE 없음.
+ *
+ * events = 최근 N건 ∪ 최신 sos_triggered 1건 (id 중복 제거).
+ *  - 최근 N건: lastActivityAt / hasAnyEvents. 최신 활동은 항상 최근 N건 안에 있다.
+ *  - 최신 sos 1건: 판정은 시간 기준(lookback 12h)인데 "최근 N건" 은 개수 기준이라,
+ *    motion 이 계속 쌓이면 12h 이내 SOS 가 조회 창 밖으로 밀려나 EMERGENCY 가 에러 없이
+ *    해제되던 결함이 있었다. 별도 조회로 보완한다 — normalize/공유 코어 입력 형태는 그대로.
+ *  - 어느 read 든 실패하면 throw (SOS 를 조용히 빠뜨리고 판정하지 않는다).
+ */
 export async function readCareStatusSource(env, { careRecipientId, deviceId, eventLimit = 100 }) {
   if (!careRecipientId) throw new Error('careRecipientId required');
   if (!deviceId) throw new Error('deviceId required');
 
-  // 두 번의 read: events 쿼리 1회 + devices point read 1회.
-  const [events, device] = await Promise.all([
+  // 세 번의 read: events 쿼리 2회 + devices point read 1회.
+  const [recent, latestSos, device] = await Promise.all([
     queryRecentEvents(env, careRecipientId, eventLimit),
+    queryLatestEventOfType(env, careRecipientId, 'sos_triggered'),
     readDeviceDoc(env, deviceId),
   ]);
 
-  return { events, device };
+  return { events: mergeEventsById(recent, latestSos), device };
 }
 
 /**

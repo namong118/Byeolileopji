@@ -33,9 +33,13 @@ export const DAILY_LIVING_ACTIVITY_EVENT_TYPES: ReadonlySet<EventType> = new Set
 );
 
 export interface TodayActivitySummary {
-  /** 오늘 발생한 생활 움직임 이벤트 수 */
+  /** 오늘 발생한 생활 움직임 이벤트 수. truncated 면 하한값이다. */
   count: number;
-  /** 오늘 첫 활동 시각 "오전 7:10". count 0 이면 undefined. */
+  /** 카드에 바로 쓸 횟수 문구 — "12회" / truncated 면 "1840회 이상" */
+  countText: string;
+  /** 오늘 이벤트가 조회 안전 상한을 넘어 일부만 집계됐는가 */
+  truncated: boolean;
+  /** 오늘 첫 활동 시각 "오전 7:10". count 0 이거나 truncated 면 undefined (실제 첫 활동이 조회 창 밖). */
   firstAt?: string;
   /** 오늘 마지막 활동 시각 "오후 3:12". count 0 이면 undefined. */
   lastAt?: string;
@@ -62,11 +66,22 @@ function clock(iso: string): string {
   return `${isAm ? '오전' : '오후'} ${h12}:${m}`;
 }
 
+export interface TodayActivityOptions {
+  /**
+   * 오늘 이벤트가 조회 안전 상한(eventWindow.TODAY_EVENTS_SAFETY_CAP)에 걸려 최신 일부만
+   * 들어왔는가. true 면 숫자를 "이상"으로 표시하고 첫 활동 시각은 만들지 않는다
+   * (가장 이른 이벤트가 조회 창 밖에 있으므로 보이는 것 중 가장 이른 시각은 거짓이다).
+   */
+  truncated?: boolean;
+}
+
 export function buildTodayActivitySummary(
   events: CareEvent[],
   now: Date = new Date(),
   activityTypes: ReadonlySet<EventType> = DAILY_LIVING_ACTIVITY_EVENT_TYPES,
+  options: TodayActivityOptions = {},
 ): TodayActivitySummary {
+  const truncated = options.truncated === true;
   const todays = events
     .filter(
       (e) =>
@@ -78,18 +93,33 @@ export function buildTodayActivitySummary(
         new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
     );
 
-  if (todays.length === 0) {
-    return { count: 0, text: '아직 확인된 활동이 없어요' };
+  if (todays.length === 0 && !truncated) {
+    return { count: 0, countText: '0회', truncated: false, text: '아직 확인된 활동이 없어요' };
+  }
+
+  const count = todays.length;
+  const lastAt = count > 0 ? clock(todays[count - 1].occurredAt) : undefined;
+
+  if (truncated) {
+    return {
+      count,
+      countText: `${count}회 이상`,
+      truncated: true,
+      firstAt: undefined,
+      lastAt,
+      text: lastAt ? `${count}번 이상 · 마지막 ${lastAt}` : `${count}번 이상`,
+    };
   }
 
   const firstAt = clock(todays[0].occurredAt);
-  const lastAt = clock(todays[todays.length - 1].occurredAt);
   const range = firstAt === lastAt ? firstAt : `${firstAt} ~ ${lastAt}`;
 
   return {
-    count: todays.length,
+    count,
+    countText: `${count}회`,
+    truncated: false,
     firstAt,
     lastAt,
-    text: `${todays.length}번 · ${range}`,
+    text: `${count}번 · ${range}`,
   };
 }

@@ -92,6 +92,18 @@ await testEnv.withSecurityRulesDisabled(async (ctx) => {
     occurredAt: new Date().toISOString(),
   });
 
+  // 앱 조회 창(오늘 범위 / 최신 sos) 쿼리용 — Worker 와 같이 occurredAt 을 Timestamp(Date)로 저장.
+  await db.collection('events').doc('evt-ts-motion').set({
+    careRecipientId: CARE_RECIPIENT_ID,
+    eventType: 'motion_detected',
+    occurredAt: new Date(),
+  });
+  await db.collection('events').doc('evt-ts-sos').set({
+    careRecipientId: CARE_RECIPIENT_ID,
+    eventType: 'sos_triggered',
+    occurredAt: new Date(Date.now() - 60 * 60 * 1000),
+  });
+
   await db.collection('devices').doc(DEVICE_ID).set({
     careRecipientId: CARE_RECIPIENT_ID,
     enabled: true,
@@ -183,6 +195,40 @@ check('[A linked] 자기 recipient events read → ALLOW (쿼리)', async () => 
   );
 });
 
+// 앱 FirestoreEventRepository 의 실제 쿼리 형태 (src/services/eventWindow.ts).
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+const todayRangeQuery = (db, careRecipientId) =>
+  db
+    .collection('events')
+    .where('careRecipientId', '==', careRecipientId)
+    .where('occurredAt', '>=', startOfToday())
+    .orderBy('occurredAt', 'desc')
+    .limit(2001);
+const latestSosQuery = (db, careRecipientId) =>
+  db
+    .collection('events')
+    .where('careRecipientId', '==', careRecipientId)
+    .where('eventType', '==', 'sos_triggered')
+    .orderBy('occurredAt', 'desc')
+    .limit(1);
+
+check('[A linked] 오늘 범위 쿼리 (occurredAt >= 로컬 자정) → ALLOW, Timestamp 문서 포함', async () => {
+  const db = ctxFor(UID_A).firestore();
+  const snap = await assertSucceeds(todayRangeQuery(db, CARE_RECIPIENT_ID).get());
+  assert.ok(snap.docs.some((d) => d.id === 'evt-ts-motion'), '오늘 Timestamp 이벤트가 범위에 포함돼야 함');
+});
+
+check('[A linked] 최신 sos 1건 쿼리 → ALLOW, sos 만 1건', async () => {
+  const db = ctxFor(UID_A).firestore();
+  const snap = await assertSucceeds(latestSosQuery(db, CARE_RECIPIENT_ID).get());
+  assert.equal(snap.size, 1);
+  assert.equal(snap.docs[0].id, 'evt-ts-sos');
+});
+
 check('[A linked] careRecipients read → ALLOW', async () => {
   const db = ctxFor(UID_A).firestore();
   await assertSucceeds(db.collection('careRecipients').doc(CARE_RECIPIENT_ID).get());
@@ -240,6 +286,16 @@ check('[A unlinked] 연결 안 된 recipient 데이터 전부 DENY', async () =>
   await assertFails(
     db.collection('events').where('careRecipientId', '==', OTHER_RECIPIENT_ID).get(),
   );
+  await assertFails(todayRangeQuery(db, OTHER_RECIPIENT_ID).get());
+  await assertFails(latestSosQuery(db, OTHER_RECIPIENT_ID).get());
+});
+
+check('[B 무링크 / C disabled] 오늘 범위 · 최신 sos 쿼리 → DENY', async () => {
+  for (const uid of [UID_B, UID_C]) {
+    const db = ctxFor(uid).firestore();
+    await assertFails(todayRangeQuery(db, CARE_RECIPIENT_ID).get());
+    await assertFails(latestSosQuery(db, CARE_RECIPIENT_ID).get());
+  }
 });
 
 check('[A unlinked] 연결 안 된 recipient 로 pushToken create → DENY', async () => {

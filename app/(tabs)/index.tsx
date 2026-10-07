@@ -30,6 +30,7 @@ export default function HomeScreen() {
   const todayEvents = useCareStore((s) => s.todayEvents);
   const events = useCareStore((s) => s.events);
   const lastActivity = useCareStore((s) => s.lastActivity);
+  const todayTruncated = useCareStore((s) => s.todayTruncated);
   const loading = useCareStore((s) => s.loading);
   const loadError = useCareStore((s) => s.loadError);
   const deviceHealth = useCareStore((s) => s.deviceHealth);
@@ -40,8 +41,11 @@ export default function HomeScreen() {
     [events, lastActivity],
   );
   const todayActivity = useMemo(
-    () => buildTodayActivitySummary(events),
-    [events],
+    () =>
+      buildTodayActivitySummary(events, new Date(), undefined, {
+        truncated: todayTruncated,
+      }),
+    [events, todayTruncated],
   );
   const today = useMemo(() => formatKoreanDate(new Date()), []);
 
@@ -98,7 +102,7 @@ export default function HomeScreen() {
               <SummaryCard
                 icon="list-outline"
                 label={labels.todayActivity}
-                value={`${todayActivity.count}회`}
+                value={todayActivity.countText}
               />
               <SummaryCard
                 icon="time-outline"

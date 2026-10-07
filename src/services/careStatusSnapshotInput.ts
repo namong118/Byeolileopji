@@ -25,7 +25,7 @@ import { ACTIVITY_EVENT_TYPES } from './eventViews.ts';
 /** Firestore READ 원본 (Worker 어댑터가 REST 응답에서 뽑아 넣는다). */
 export interface CareStatusSource {
   /** 대상자(careRecipientId) 이벤트. 정렬 순서는 신경쓰지 않아도 된다 (여기서 정렬). */
-  events: readonly { eventType?: string; occurredAt?: string }[];
+  events: readonly { id?: string; eventType?: string; occurredAt?: string }[];
   /** devices/{deviceId} 문서. 문서가 없으면 null. */
   device: { lastEventAt?: string; lastHeartbeatAt?: string } | null;
 }

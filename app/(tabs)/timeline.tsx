@@ -17,14 +17,18 @@ import { formatKoreanDate, formatRelativeDetailed } from '../../src/utils/time';
 export default function TimelineScreen() {
   const todayEvents = useCareStore((s) => s.todayEvents);
   const lastActivity = useCareStore((s) => s.lastActivity);
+  const todayTruncated = useCareStore((s) => s.todayTruncated);
   const loading = useCareStore((s) => s.loading);
   const loadError = useCareStore((s) => s.loadError);
   const reload = useCareStore((s) => s.reload);
 
   const today = useMemo(() => formatKoreanDate(new Date()), []);
   const todayActivity = useMemo(
-    () => buildTodayActivitySummary(todayEvents),
-    [todayEvents],
+    () =>
+      buildTodayActivitySummary(todayEvents, new Date(), undefined, {
+        truncated: todayTruncated,
+      }),
+    [todayEvents, todayTruncated],
   );
   const hasEvents = todayEvents.length > 0;
   const recentActivityValue = lastActivity
@@ -43,7 +47,7 @@ export default function TimelineScreen() {
           </View>
           <View>
             <Text style={styles.summaryLabel}>오늘 활동</Text>
-            <Text style={styles.summaryValue}>{todayActivity.count}회</Text>
+            <Text style={styles.summaryValue}>{todayActivity.countText}</Text>
           </View>
         </View>
         <View style={styles.summaryDivider} />
@@ -80,7 +84,8 @@ export default function TimelineScreen() {
           style={styles.card}
           variant={hasEvents ? 'elevated' : 'tinted'}
         >
-          <TimelineList events={todayEvents} markFirstActivity />
+          {/* 잘렸으면 보이는 것 중 가장 이른 motion 이 실제 "오늘 첫 활동" 이 아니다 */}
+          <TimelineList events={todayEvents} markFirstActivity={!todayTruncated} />
         </Card>
       ) : null}
     </ScreenScrollView>

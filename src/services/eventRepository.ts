@@ -14,12 +14,23 @@ import type { CareEvent } from '../types/events';
 /** 실시간 구독 해제 함수 */
 export type Unsubscribe = () => void;
 
-/** 실시간 이벤트 리스너. 항상 "최신 우선" 전체 목록을 전달한다. */
-export type EventsListener = (events: CareEvent[]) => void;
+/** 조회 창 메타데이터 (src/services/eventWindow.ts). */
+export interface EventsMeta {
+  /** 오늘 이벤트가 안전 상한을 넘어 일부만 담겼는가. 이 값이 true 면 오늘 통계는 하한값이다. */
+  todayTruncated: boolean;
+}
+
+/** 실시간 이벤트 리스너. 항상 "최신 우선" 전체 목록을 전달한다. meta 는 지원 저장소만 준다. */
+export type EventsListener = (events: CareEvent[], meta?: EventsMeta) => void;
 
 export interface EventRepository {
   /** 발생 시각 역순(최신 우선)으로 반환 */
   listEvents(): Promise<CareEvent[]>;
+  /**
+   * (선택) listEvents 와 같은 목록 + 조회 창 메타데이터. 구현하지 않은 저장소는
+   * EventService 가 `{ todayTruncated: false }` 로 채운다 (InMemory 는 잘리지 않는다).
+   */
+  listEventsWithMeta?(): Promise<{ events: CareEvent[]; meta: EventsMeta }>;
   /**
    * 단일 이벤트를 영속 저장하고, 저장된(정규화된) 이벤트를 돌려준다.
    * 원격 구현은 서버가 생성한 실제 id 를 채워 반환한다.

@@ -94,6 +94,11 @@ interface CareState extends DerivedSlice {
   realtime: boolean;
   careTarget: CareTarget;
   emergencyAckedAt?: number;
+  /**
+   * 오늘 이벤트가 조회 안전 상한(TODAY_EVENTS_SAFETY_CAP)을 넘어 일부만 담겼는가.
+   * true 면 오늘 활동 수는 하한값("N회 이상"), 첫 활동 시각은 알 수 없다.
+   */
+  todayTruncated: boolean;
 
   /** 원격 devices/{id} 문서 (Firestore 모드). 없으면 undefined. */
   deviceDoc?: DeviceDoc;
@@ -172,8 +177,9 @@ function project(input: ProjectInput): DerivedSlice {
   };
 }
 
-async function loadEvents(): Promise<CareEvent[]> {
-  return getEventService().getEvents();
+async function loadEvents(): Promise<{ events: CareEvent[]; todayTruncated: boolean }> {
+  const { events, meta } = await getEventService().getEventsWithMeta();
+  return { events, todayTruncated: meta.todayTruncated };
 }
 
 /** get() 에서 project 에 넘길 공통 입력을 뽑아낸다 */
@@ -202,6 +208,7 @@ export const useCareStore = create<CareState>((set, get) => ({
   realtime: false,
   careTarget: mockCareTarget,
   emergencyAckedAt: undefined,
+  todayTruncated: false,
   deviceDoc: undefined,
   deviceHealthOverride: undefined,
 
@@ -217,9 +224,10 @@ export const useCareStore = create<CareState>((set, get) => ({
       if (getEventDataSource() === 'memory') {
         await getEventService().seed(buildSeedEvents());
       }
-      const events = await loadEvents();
+      const { events, todayTruncated } = await loadEvents();
       set({
         ...project(projectInputFrom({ ...get(), events }, new Date())),
+        todayTruncated,
         ready: true,
         loading: false,
       });
@@ -235,9 +243,10 @@ export const useCareStore = create<CareState>((set, get) => ({
 
     // events 실시간 구독 (최초 1회)
     if (!realtimeUnsub && getEventService().supportsRealtime()) {
-      realtimeUnsub = getEventService().subscribeToEvents((events) => {
+      realtimeUnsub = getEventService().subscribeToEvents((events, meta) => {
         set({
           ...project(projectInputFrom({ ...get(), events }, new Date())),
+          todayTruncated: meta?.todayTruncated ?? false,
           ready: true,
           loading: false,
         });
@@ -274,9 +283,10 @@ export const useCareStore = create<CareState>((set, get) => ({
   reload: async () => {
     set({ loading: true, loadError: undefined });
     try {
-      const events = await loadEvents();
+      const { events, todayTruncated } = await loadEvents();
       set({
         ...project(projectInputFrom({ ...get(), events }, new Date())),
+        todayTruncated,
         loading: false,
       });
     } catch (error) {
@@ -352,6 +362,7 @@ export const useCareStore = create<CareState>((set, get) => ({
       deviceDoc: undefined,
       deviceHealthOverride: undefined,
       emergencyAckedAt: undefined,
+      todayTruncated: false,
     });
   },
 }));

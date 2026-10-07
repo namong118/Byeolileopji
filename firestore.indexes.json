@@ -1,11 +1,20 @@
 {
-  "//": "별일없지 Firestore 복합 인덱스. events: careRecipientId(==) + occurredAt(desc) 쿼리에 필요.",
+  "//": "별일없지 Firestore 복합 인덱스. events: (1) careRecipientId(==) + occurredAt(desc) — 최근 N건 / 오늘 범위(occurredAt >=) 쿼리. (2) careRecipientId(==) + eventType(==) + occurredAt(desc) — 최신 sos_triggered 1건 쿼리 (Worker careStatus Cron + 앱).",
   "indexes": [
     {
       "collectionGroup": "events",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "careRecipientId", "order": "ASCENDING" },
+        { "fieldPath": "occurredAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "careRecipientId", "order": "ASCENDING" },
+        { "fieldPath": "eventType", "order": "ASCENDING" },
         { "fieldPath": "occurredAt", "order": "DESCENDING" }
       ]
     }

@@ -82,9 +82,21 @@ function mockFirestore({ events = [], device = undefined, deviceMissing = false 
     }
 
     if (u.includes(':runQuery') && method === 'POST') {
-      const rows = events.map((e) => ({
+      // structuredQuery 를 실제로 반영한다: eventType EQUAL 필터 / occurredAt DESC / limit.
+      // (최신 sos 1건 별도 조회가 추가되어, 쿼리를 무시하면 결과가 중복된다.)
+      const sq = body.structuredQuery;
+      const filters = sq.where.compositeFilter ? sq.where.compositeFilter.filters : [sq.where];
+      let selected = events.map((e, i) => ({ ...e, _id: `evt${i}` }));
+      for (const { fieldFilter: ff } of filters) {
+        if (ff.field.fieldPath === 'eventType') {
+          selected = selected.filter((e) => e.eventType === ff.value.stringValue);
+        }
+      }
+      selected.sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
+      if (typeof sq.limit === 'number') selected = selected.slice(0, sq.limit);
+      const rows = selected.map((e) => ({
         document: {
-          name: `projects/p/databases/(default)/documents/events/${Math.random().toString(36).slice(2)}`,
+          name: `projects/p/databases/(default)/documents/events/${e._id}`,
           fields: toFirestoreFields({
             careRecipientId: CARE_ID,
             eventType: e.eventType,
@@ -359,7 +371,7 @@ check('parity — sos_triggered 는 activity 가 아니다 (lastActivityAt 로 �
   assert.equal(input.hasAnyEvents, true);
 });
 
-check('readCareStatusSource — READ 2회 (events 쿼리 + devices point read), WRITE 0', async () => {
+check('readCareStatusSource — READ 3회 (events 최근 N건 + 최신 sos 1건 + devices point read), WRITE 0', async () => {
   const m = mockFirestore({
     events: [{ eventType: 'motion_detected', occurredAt: iso(5) }],
     device: { lastHeartbeatAt: iso(8) },
@@ -370,7 +382,7 @@ check('readCareStatusSource — READ 2회 (events 쿼리 + devices point read), 
     assert.equal(src.events.length, 1);
     assert.ok(src.device);
     const reads = m.calls.filter((c) => c.method === 'GET' || (c.method === 'POST' && c.u.includes(':runQuery')));
-    assert.equal(reads.length, 2);
+    assert.equal(reads.length, 3);
   } finally {
     m.restore();
   }
