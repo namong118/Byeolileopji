@@ -33,7 +33,7 @@ export default function HomeScreen() {
   const todayTruncated = useCareStore((s) => s.todayTruncated);
   const loading = useCareStore((s) => s.loading);
   const loadError = useCareStore((s) => s.loadError);
-  const realtimeError = useCareStore((s) => s.realtimeError);
+  const syncNotice = useCareStore((s) => s.syncNotice);
   const deviceHealth = useCareStore((s) => s.deviceHealth);
   const deviceHealthOverride = useCareStore((s) => s.deviceHealthOverride);
 
@@ -119,9 +119,9 @@ export default function HomeScreen() {
         <View style={styles.banner}>
           <Notice message={loadError} tone="error" />
         </View>
-      ) : realtimeError ? (
+      ) : syncNotice ? (
         <View style={styles.banner}>
-          <Notice message={realtimeError} tone="error" />
+          <Notice message={syncNotice} tone="error" />
         </View>
       ) : loading ? (
         <View style={styles.banner}>

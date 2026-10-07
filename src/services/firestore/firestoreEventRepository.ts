@@ -131,7 +131,15 @@ export class FirestoreEventRepository implements EventRepository {
         today: FirestoreEventRepository.mapAll(today),
         latestSos: FirestoreEventRepository.mapAll(latestSos),
       });
-      return { events: r.events, meta: { todayTruncated: r.todayTruncated } };
+      return {
+        events: r.events,
+        meta: {
+          todayTruncated: r.todayTruncated,
+          // getDocs 는 오프라인이면 캐시로 응답할 수 있다 — 서버 확인 여부를 그대로 전달한다.
+          fromCache:
+            recent.metadata.fromCache || today.metadata.fromCache || latestSos.metadata.fromCache,
+        },
+      };
     } catch (error) {
       throw new EventRepositoryError(
         `Firestore 이벤트 조회 실패: ${describe(error)}`,
@@ -191,7 +199,10 @@ export class FirestoreEventRepository implements EventRepository {
     return (onNext, onError) =>
       onSnapshot(
         q,
-        (snap) => onNext(FirestoreEventRepository.mapAll(snap)),
+        // 네트워크 끊김은 error 가 아니라 fromCache=true 메타데이터 변경으로만 온다.
+        // includeMetadataChanges 없이는 그 변경이 전달되지 않는다 (syncState.ts).
+        { includeMetadataChanges: true },
+        (snap) => onNext(FirestoreEventRepository.mapAll(snap), { fromCache: snap.metadata.fromCache }),
         (error) => {
           if (__DEV__) {
             console.error(`[별일없지] Firestore 실시간 구독 오류 (${label})`, error);
@@ -207,7 +218,7 @@ export class FirestoreEventRepository implements EventRepository {
    * eventWindow.createEventWindowSubscription — Node 스모크로 검증된다.
    *
    * - 어느 구독이든 오류가 나면 onError 가 한 번 호출되고 이후 listener 는 호출되지 않는다.
-   *   (마지막 상태로 조용히 멈추지 않는다 — careStore 가 realtimeError 로 화면에 드러낸다.)
+   *   (마지막 상태로 조용히 멈추지 않는다 — careStore 가 eventsSync.failed → syncNotice 로 화면에 드러낸다.)
    * - 로컬 날짜 변경은 DAY_ROLLOVER_CHECK_MS 주기 + refreshDayWindow()(AppState active)로 반영한다.
    */
   subscribeToEvents(

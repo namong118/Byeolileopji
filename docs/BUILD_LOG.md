@@ -1996,3 +1996,32 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
   백그라운드 장시간 후 자정 넘어 복귀. careStore 의 RN 연결부는 정적 검사로만 확인했다.
 - **알려진 한계**: `devices/{id}` 구독(`deviceRepository.ts`)도 오류 시 로그만 남기고
   마지막 기기 상태로 멈춘다 (이번 변경 이전부터 있던 동작, 이번 범위 밖).
+
+### 후속 보완 2 — 오프라인(캐시) 상태 감지
+
+- **SDK 동작 확인** (`firebase` 12.18.0 / `@firebase/firestore` 4.17.1, RN 번들
+  `dist/common-*.rn.js` 의 `__PRIVATE_QueryListener` / `View`):
+  - 네트워크 끊김은 onSnapshot **error 콜백으로 오지 않는다** (error 는 리슨 거부 — 권한 등 — 만).
+  - 끊기면 View 가 `current=false` 가 되어 `fromCache=true` 인 메타데이터 전용 스냅샷이 생기지만,
+    QueryListener 는 문서 변화가 없으면 **`includeMetadataChanges === true` 일 때만** 전달한다.
+  - → 위 "후속 보완" 의 오류 배너는 네트워크 끊김을 잡지 못했다.
+- **변경**
+  - `src/services/syncState.ts` (신규, 순수): `StreamSync { failed, fromCache, cacheSince,
+    lastServerSyncAt }` 와 상태 `live / cache_grace / offline / failed`. 캐시 상태가
+    `OFFLINE_STALE_AFTER_MS`(2분) 이상 이어지면 `offline`. `offline` 과 `failed` 는 내부적으로
+    구분하되 `isStreamStale()` 로 **같은 화면 규칙**(배너 문구 `STALE_DATA_MESSAGE`, Hero
+    `presentStaleHome` — "별일 없어요" 금지, EMERGENCY 유지)을 적용한다.
+  - `FirestoreEventRepository`: 세 쿼리 모두 `{ includeMetadataChanges: true }` 로 구독하고
+    `snap.metadata.fromCache` 를 전달. `getDocs`(init / reload) 결과의 `fromCache` 도 전달.
+  - `createEventWindowSubscription`: 구독별 fromCache 추적, `meta.fromCache` = 하나라도 캐시면 true.
+    메타데이터만 바뀐 스냅샷도 내보낸다.
+  - `careStore`: `realtimeError` / `lastSyncedAt` → `eventsSync: StreamSync`. 화면 문구는
+    `project()` 가 now 로 계산하는 `syncNotice` — 재계산 타이머(기본 30초)마다 갱신되므로 끊김 후
+    약 2분~2분 30초에 표시된다. 네트워크가 돌아오면 SDK 의 `fromCache=false` 스냅샷으로 **자동 해제**.
+  - "…까지 확인한 정보예요" 의 시각은 **서버에서 확인된** 마지막 스냅샷 시각(`lastServerSyncAt`).
+- **검증**: `care-window-regression-smoke.mjs` 33 → 42 checks (O1–O8 + 정적 검사 1).
+- **미검증**: 실기기 비행기 모드 → 약 2분 후 배너 → 해제 후 자동 사라짐. SDK 가 Offline 으로
+  판정하기까지의 시간(스트림 실패 / 연결 타임아웃)은 기기·네트워크마다 다르며, 그 시간도 유예에
+  더해진다.
+- **알려진 한계**: 앱이 오프라인으로 시작하면 캐시 데이터가 최대 2분간 일반 상태로 보인다
+  (온라인 시작 시 캐시 → 서버 전환 동안 배너가 깜박이지 않게 하기 위한 유예).

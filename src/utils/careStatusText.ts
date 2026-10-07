@@ -161,7 +161,7 @@ export function presentHome(
 }
 
 /**
- * 실시간 갱신이 끊겼을 때(careStore.realtimeError) Hero 문구.
+ * 화면이 최신이 아닐 때(careStore.syncNotice — 구독 오류 또는 오프라인 지속) Hero 문구.
  *
  * 보호자 앱에서는 **오래된 "오늘도 별일 없어요" 가 에러 화면보다 위험하다.** 그래서:
  *  - EMERGENCY 는 숨기지 않는다 (오래된 EMERGENCY 를 지우는 쪽이 더 위험) — 문구는 유지하고
@@ -171,7 +171,7 @@ export function presentHome(
  *
  * @param base       presentHome() 결과 (마지막으로 받은 데이터 기준)
  * @param careStatus effective 사람-축 결과
- * @param lastSyncedAt 마지막으로 이벤트를 성공적으로 받은 시각 (ISO)
+ * @param lastSyncedAt 서버에서 확인된 스냅샷을 마지막으로 받은 시각 (ISO, StreamSync.lastServerSyncAt)
  */
 export function presentStaleHome(
   base: CareStatusText,

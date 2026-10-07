@@ -43,6 +43,15 @@ import { buildTodayActivitySummary } from '../src/utils/todayActivity.ts';
 import { createEventWindowSubscription, rollTodayWindow } from '../src/services/eventWindow.ts';
 import { presentHome, presentStaleHome } from '../src/utils/careStatusText.ts';
 import fs from 'node:fs';
+import {
+  applySnapshotSync,
+  applyStreamFailure,
+  initialStreamSync,
+  isStreamStale,
+  OFFLINE_STALE_AFTER_MS,
+  STALE_DATA_MESSAGE,
+  streamSyncKind,
+} from '../src/services/syncState.ts';
 
 const tests = [];
 const check = (name, fn) => tests.push({ name, fn });
@@ -474,7 +483,7 @@ function fakeSource() {
       h.unsubscribed += 1;
     };
   };
-  h.push = (events) => h.onNext(newestFirst(events));
+  h.push = (events, fromCache = false) => h.onNext(newestFirst(events), { fromCache });
   h.fail = (err = new Error('permission-denied')) => h.onError(err);
   return h;
 }
@@ -668,19 +677,121 @@ check('P3. 끊김 + EMERGENCY → EMERGENCY 는 숨기지 않고 "최신 정보 
   assert.match(t.detail, /최신 정보를 불러오지 못하고 있어요/);
 });
 
+// ── 오프라인(캐시) 감지 — syncState.ts ────────────────────────────────
+//  SDK 는 네트워크 끊김 시 error 를 부르지 않고 fromCache=true 스냅샷만 준다
+//  (includeMetadataChanges 필요). 유예 2분이 지나면 failed 와 같은 표시.
+
+const T0 = new Date('2026-09-07T12:00:00.000Z');
+const at = (ms) => new Date(T0.getTime() + ms);
+
+check('O1. 서버 스냅샷 → live, 캐시 스냅샷 → 2분 미만 cache_grace / 2분 이상 offline (stale)', () => {
+  assert.equal(OFFLINE_STALE_AFTER_MS, 2 * 60_000);
+  const live = applySnapshotSync(initialStreamSync(T0), { fromCache: false }, T0);
+  assert.equal(streamSyncKind(live, at(10 * MIN)), 'live', 'live 는 시간이 지나도 stale 아님 (변경 없는 정상 구독)');
+  const cached = applySnapshotSync(live, { fromCache: true }, at(MIN));
+  assert.equal(streamSyncKind(cached, at(MIN + 119_999)), 'cache_grace');
+  assert.equal(isStreamStale(cached, at(MIN + 119_999)), false);
+  assert.equal(streamSyncKind(cached, at(MIN + 120_000)), 'offline');
+  assert.equal(isStreamStale(cached, at(MIN + 120_000)), true);
+  assert.equal(cached.lastServerSyncAt, T0.toISOString(), '마지막 서버 확인 시각은 유지');
+});
+
+check('O2. 캐시 스냅샷이 연달아 와도 유예 타이머는 처음 끊긴 시각 기준', () => {
+  const live = applySnapshotSync(initialStreamSync(T0), { fromCache: false }, T0);
+  let s = applySnapshotSync(live, { fromCache: true }, at(MIN));
+  s = applySnapshotSync(s, { fromCache: true }, at(2 * MIN)); // 캐시에서 문서 변경 등
+  assert.equal(s.cacheSince, at(MIN).toISOString());
+  assert.equal(isStreamStale(s, at(3 * MIN)), true);
+});
+
+check('O3. 네트워크 복귀 — 서버 스냅샷 1회로 live 복귀, 별도 조작 없이 stale 해제', () => {
+  const live = applySnapshotSync(initialStreamSync(T0), { fromCache: false }, T0);
+  const off = applySnapshotSync(live, { fromCache: true }, at(MIN));
+  assert.equal(isStreamStale(off, at(10 * MIN)), true);
+  const back = applySnapshotSync(off, { fromCache: false }, at(10 * MIN));
+  assert.equal(streamSyncKind(back, at(10 * MIN)), 'live');
+  assert.equal(back.cacheSince, undefined);
+  assert.equal(back.lastServerSyncAt, at(10 * MIN).toISOString());
+});
+
+check('O4. failed(구독 오류)와 offline 은 내부적으로 구분, 화면 판정(stale)은 동일', () => {
+  const live = applySnapshotSync(initialStreamSync(T0), { fromCache: false }, T0);
+  const failed = applyStreamFailure(live);
+  assert.equal(streamSyncKind(failed, at(1000)), 'failed', '오류는 유예 없이 즉시');
+  assert.equal(isStreamStale(failed, at(1000)), true);
+  const offline = applySnapshotSync(live, { fromCache: true }, T0);
+  assert.equal(streamSyncKind(offline, at(3 * MIN)), 'offline');
+  assert.notEqual(streamSyncKind(failed, at(3 * MIN)), streamSyncKind(offline, at(3 * MIN)));
+  assert.equal(isStreamStale(offline, at(3 * MIN)), isStreamStale(failed, at(3 * MIN)));
+  // failed 는 재구독 후 첫 스냅샷이 오면 해제 (캐시 스냅샷이면 offline 유예로 넘어감)
+  assert.equal(streamSyncKind(applySnapshotSync(failed, { fromCache: false }, at(MIN)), at(MIN)), 'live');
+  assert.equal(applySnapshotSync(failed, { fromCache: true }, at(MIN)).failed, false);
+});
+
+check('O5. 앱 시작부터 서버 확인이 한 번도 안 되면 (오프라인 시작) 시작 시각 기준 2분 후 stale', () => {
+  const s0 = initialStreamSync(T0);
+  const cachedStart = applySnapshotSync(s0, { fromCache: true }, at(500)); // 캐시 문서로 첫 화면
+  assert.equal(cachedStart.lastServerSyncAt, undefined);
+  assert.equal(isStreamStale(cachedStart, at(MIN)), false);
+  assert.equal(isStreamStale(cachedStart, at(2 * MIN)), true);
+  // 일반적인 온라인 시작: 캐시 → 곧바로 서버 → 배너 깜박임 없음
+  const online = applySnapshotSync(cachedStart, { fromCache: false }, at(800));
+  assert.equal(isStreamStale(online, at(800)), false);
+});
+
+check('O6. 구독 조정 — meta.fromCache 는 세 구독 중 하나라도 캐시면 true, 메타데이터 변경만으로도 전달', () => {
+  const t = harness();
+  t.recent.push([]);
+  t.today().push([]);
+  t.sos.push([]);
+  assert.equal(t.emitted.at(-1).meta.fromCache, false);
+  t.sos.push([], true); // 네트워크 끊김 → 문서 변화 없이 fromCache 만 바뀜
+  assert.equal(t.emitted.length, 2, '메타데이터만 바뀐 스냅샷도 내보낸다');
+  assert.equal(t.emitted.at(-1).meta.fromCache, true);
+  t.sos.push([], false); // 복귀 (recent/today 는 줄곧 서버 상태)
+  assert.equal(t.emitted.at(-1).meta.fromCache, false, '복귀 스냅샷으로 자동 해제');
+});
+
+check('O7. 구독 조정 — 세 구독 모두 서버 스냅샷으로 돌아와야 fromCache=false', () => {
+  const t = harness();
+  t.recent.push([], true);
+  t.today().push([], true);
+  t.sos.push([], true);
+  assert.equal(t.emitted.at(-1).meta.fromCache, true);
+  t.recent.push([], false);
+  t.today().push([], false);
+  assert.equal(t.emitted.at(-1).meta.fromCache, true);
+  t.sos.push([], false);
+  assert.equal(t.emitted.at(-1).meta.fromCache, false);
+});
+
+check('O8. stale 문구는 오류/오프라인 공통 STALE_DATA_MESSAGE', () => {
+  assert.equal(STALE_DATA_MESSAGE, '최신 정보를 불러오지 못했어요. 화면의 정보가 지금 상태와 다를 수 있어요.');
+});
+
 // ── 정적 검사: careStore 연결 (RN 런타임 없이 확인 가능한 범위) ──────────
 const careStoreSrc = fs.readFileSync(new URL('../src/stores/careStore.ts', import.meta.url), 'utf8');
 
-check('static. careStore — 구독 onError 가 realtimeError 를 세우고 Hero 가 stale 로 계산된다', () => {
+check('static. careStore — 구독 onNext 는 fromCache 로, onError 는 failed 로 eventsSync 를 갱신하고 Hero 가 stale 로 계산된다', () => {
   const start = careStoreSrc.indexOf('function startEventsRealtime');
   assert.ok(start > 0, 'startEventsRealtime 존재');
   const body = careStoreSrc.slice(start, careStoreSrc.indexOf('\n}\n', start));
   assert.match(
     body,
-    /subscribeToEvents\(\s*\(events, meta\) =>[\s\S]*?\},\s*\(\) => \{[\s\S]*realtimeError: REALTIME_ERROR_MESSAGE/,
+    /subscribeToEvents\(\s*\(events, meta\) =>[\s\S]*?applySnapshotSync\([\s\S]*?fromCache: meta\?\.fromCache === true[\s\S]*?\},\s*\(\) => \{[\s\S]*applyStreamFailure\(/,
   );
-  assert.match(careStoreSrc, /stale: Boolean\(state\.realtimeError\)/);
-  assert.match(careStoreSrc, /input\.stale\s*\?\s*presentStaleHome\(/);
+  assert.match(careStoreSrc, /const stale = input\.eventsSync \? isStreamStale\(input\.eventsSync, now\) : false/);
+  assert.match(careStoreSrc, /syncNotice: stale \? STALE_DATA_MESSAGE : undefined/);
+  assert.match(careStoreSrc, /statusText: stale\s*\?\s*presentStaleHome\(/);
+});
+
+check('static. FirestoreEventRepository — includeMetadataChanges 로 구독하고 fromCache 를 전달한다', () => {
+  const repoSrc = fs.readFileSync(
+    new URL('../src/services/firestore/firestoreEventRepository.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(repoSrc, /\{ includeMetadataChanges: true \}/);
+  assert.match(repoSrc, /fromCache: snap\.metadata\.fromCache/);
 });
 
 check('static. careStore — AppState active: refreshDayWindow() → (끊김이면 재구독) → refreshDerived()', () => {
@@ -688,6 +799,7 @@ check('static. careStore — AppState active: refreshDayWindow() → (끊김이�
   assert.ok(i > 0);
   const handler = careStoreSrc.slice(i, careStoreSrc.indexOf('});', i));
   const a = handler.indexOf('refreshDayWindow()');
+  assert.match(handler, /if \(get\(\)\.eventsSync\?\.failed\) startEventsRealtime\(set, get\)/);
   const b = handler.indexOf('startEventsRealtime(set, get)');
   const c = handler.indexOf('refreshDerived()');
   assert.ok(a > 0 && b > a && c > b, '순서: 날짜 창 이동 → 재구독 → 재계산');

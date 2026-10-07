@@ -112,9 +112,13 @@ export function rollTodayWindow(
 
 export type EventWindowKey = keyof EventWindowParts;
 
-/** 단일 쿼리 구독. onNext 는 최신 우선 목록, onError 이후에는 더 호출되지 않는다(onSnapshot 과 동일). */
+/**
+ * 단일 쿼리 구독. onNext 는 최신 우선 목록 + 스냅샷 출처(fromCache), onError 이후에는 더
+ * 호출되지 않는다(onSnapshot 과 동일). 저장소는 includeMetadataChanges 로 구독해
+ * 캐시 ↔ 서버 전환(네트워크 끊김/복구)도 onNext 로 전달해야 한다 (syncState.ts 참고).
+ */
 export type EventWindowSource = (
-  onNext: (events: CareEvent[]) => void,
+  onNext: (events: CareEvent[], info: { fromCache: boolean }) => void,
   onError: (error: unknown) => void,
 ) => () => void;
 
@@ -123,7 +127,8 @@ export interface EventWindowSubscriptionDeps {
   /** 주어진 로컬 자정 이후 범위의 today 구독을 만든다 (날짜가 바뀌면 다시 호출된다) */
   today: (dayStart: Date) => EventWindowSource;
   latestSos: EventWindowSource;
-  listener: (events: CareEvent[], meta: { todayTruncated: boolean }) => void;
+  /** meta.fromCache = 세 구독 중 하나라도 캐시 스냅샷이면 true (서버 확인 안 됨) */
+  listener: (events: CareEvent[], meta: { todayTruncated: boolean; fromCache: boolean }) => void;
   /** 세 구독 중 하나라도 오류가 나면 **한 번** 호출된다. 그 이후 listener 는 호출되지 않는다. */
   onError?: (error: unknown, source: EventWindowKey) => void;
   now?: () => Date;
@@ -144,13 +149,14 @@ export interface EventWindowSubscription {
  * - 어느 구독이든 오류가 나면 **실패 상태로 고정**하고 onError 를 한 번 부른다. 이후 다른
  *   구독이 갱신돼도 listener 를 부르지 않는다 — 오래된 조각(예: 멈춘 SOS)과 새 조각을 섞은
  *   목록으로 판정하지 않는다. 화면은 onError 를 받아 "최신 정보를 불러오지 못했어요" 를
- *   드러낸다 (careStore.realtimeError). 복구는 호출자가 새 구독을 만드는 것이다.
+ *   드러낸다 (careStore.eventsSync.failed → syncNotice). 복구는 호출자가 새 구독을 만드는 것이다.
  */
 export function createEventWindowSubscription(
   deps: EventWindowSubscriptionDeps,
 ): EventWindowSubscription {
   const now = deps.now ?? (() => new Date());
   const parts: Partial<EventWindowParts> = {};
+  const fromCache: Record<EventWindowKey, boolean> = { recent: true, today: true, latestSos: true };
   let failed = false;
   let closed = false;
 
@@ -158,13 +164,17 @@ export function createEventWindowSubscription(
     if (failed || closed) return;
     if (!parts.recent || !parts.today || !parts.latestSos) return;
     const r = combineEventWindows(parts as EventWindowParts, deps.cap);
-    deps.listener(r.events, { todayTruncated: r.todayTruncated });
+    deps.listener(r.events, {
+      todayTruncated: r.todayTruncated,
+      fromCache: fromCache.recent || fromCache.today || fromCache.latestSos,
+    });
   };
 
   const open = (source: EventWindowSource, key: EventWindowKey) =>
     source(
-      (events) => {
+      (events, info) => {
         parts[key] = events;
+        fromCache[key] = info.fromCache;
         emit();
       },
       (error) => {
@@ -187,6 +197,7 @@ export function createEventWindowSubscription(
       dayStartMs = next;
       unsubToday();
       if (parts.today) parts.today = rollTodayWindow(parts.today, dayStartMs);
+      // 새 today 구독이 서버 스냅샷을 주기 전까지는 이전 창에서 걸러낸 결과일 뿐이다 — 서버 확인 상태는 유지.
       emit(); // 새 today 스냅샷 전이라도 어제 데이터 / 어제 잘림 표시를 즉시 걷어낸다
       unsubToday = open(deps.today(new Date(dayStartMs)), 'today');
       return true;

@@ -18,6 +18,8 @@ export type Unsubscribe = () => void;
 export interface EventsMeta {
   /** 오늘 이벤트가 안전 상한을 넘어 일부만 담겼는가. 이 값이 true 면 오늘 통계는 하한값이다. */
   todayTruncated: boolean;
+  /** 서버 확인 없이 캐시에서 나온 결과인가 (네트워크 끊김 등). 지원하지 않는 저장소는 생략(=false). */
+  fromCache?: boolean;
 }
 
 /** 실시간 이벤트 리스너. 항상 "최신 우선" 전체 목록을 전달한다. meta 는 지원 저장소만 준다. */

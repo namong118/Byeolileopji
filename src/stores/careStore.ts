@@ -54,6 +54,14 @@ import {
   type CareStatusText,
 } from '../utils/careStatusText';
 import { buildSeedEvents } from '../mock/seedEvents';
+import {
+  applySnapshotSync,
+  applyStreamFailure,
+  initialStreamSync,
+  isStreamStale,
+  STALE_DATA_MESSAGE,
+  type StreamSync,
+} from '../services/syncState';
 import { mockCareTarget, type CareTarget } from '../mock/careTarget';
 
 interface StatusOverride {
@@ -78,6 +86,12 @@ interface DerivedSlice {
   statusText: CareStatusText;
   /** 사람 상태 오버라이드가 유효하면 그 값 (만료 시 자동 제거) */
   statusOverride?: StatusOverride;
+  /**
+   * 화면이 최신이 아닐 때의 사용자 문구 (STALE_DATA_MESSAGE). 없으면 최신.
+   * 구독 오류(failed)와 오프라인 지속(offline, 유예 OFFLINE_STALE_AFTER_MS 초과)을 같은 문구로 보인다.
+   * now 로 계산되므로 재계산 타이머마다 갱신되고, 서버 스냅샷이 다시 오면 자동으로 사라진다.
+   */
+  syncNotice?: string;
 }
 
 interface ProjectInput {
@@ -88,10 +102,8 @@ interface ProjectInput {
   emergencyAckedAt?: number;
   /** [개발용] 기기 축 자동 판정을 덮어쓴다 */
   deviceHealthOverride?: DeviceHealth;
-  /** 실시간 갱신이 끊겼는가 — true 면 Hero 를 "최신 정보 아님" 문구로 바꾼다 (presentStaleHome) */
-  stale?: boolean;
-  /** 마지막으로 이벤트를 성공적으로 받은 시각 (ISO) */
-  lastSyncedAt?: string;
+  /** events 구독 동기화 상태. 없으면 최신으로 본다 (InMemory). */
+  eventsSync?: StreamSync;
 }
 
 interface CareState extends DerivedSlice {
@@ -108,13 +120,10 @@ interface CareState extends DerivedSlice {
    */
   todayTruncated: boolean;
   /**
-   * 사용 중 실시간 이벤트 구독이 실패해 화면이 더 이상 갱신되지 않는 상태의 사용자 문구.
-   * 있으면 Hero 는 확정 표현 대신 "최신 정보를 불러오지 못했어요" 를 쓴다 (EMERGENCY 는 유지).
-   * 재구독(reload / AppState active)이 성공해 새 데이터를 받으면 지워진다.
+   * events 구독 동기화 상태 (syncState.ts). failed = 구독 오류(재구독 필요),
+   * fromCache 지속 = 오프라인(SDK 자동 복구 대기). 둘 다 syncNotice / Hero stale 로 드러난다.
    */
-  realtimeError?: string;
-  /** 마지막으로 이벤트를 성공적으로 받은 시각 (ISO) */
-  lastSyncedAt?: string;
+  eventsSync?: StreamSync;
 
   /** 원격 devices/{id} 문서 (Firestore 모드). 없으면 undefined. */
   deviceDoc?: DeviceDoc;
@@ -180,7 +189,11 @@ function project(input: ProjectInput): DerivedSlice {
   const effectiveDeviceHealth: DeviceHealth =
     input.deviceHealthOverride ?? deviceHealth.health;
 
+  // ── 최신성 (구독 오류 / 오프라인 지속) ───────────────────────────────
+  const stale = input.eventsSync ? isStreamStale(input.eventsSync, now) : false;
+
   return {
+    syncNotice: stale ? STALE_DATA_MESSAGE : undefined,
     events: views.events,
     todayEvents: views.todayEvents,
     lastActivity: views.lastActivity,
@@ -188,20 +201,24 @@ function project(input: ProjectInput): DerivedSlice {
     careStatus: derived,
     deviceHealth,
     status: effectivePerson.status,
-    statusText: input.stale
+    statusText: stale
       ? presentStaleHome(
           presentHome(effectivePerson, effectiveDeviceHealth, now),
           effectivePerson,
-          input.lastSyncedAt,
+          input.eventsSync?.lastServerSyncAt,
         )
       : presentHome(effectivePerson, effectiveDeviceHealth, now),
     statusOverride: overrideActive ? input.statusOverride : undefined,
   };
 }
 
-async function loadEvents(): Promise<{ events: CareEvent[]; todayTruncated: boolean }> {
+async function loadEvents(): Promise<{
+  events: CareEvent[];
+  todayTruncated: boolean;
+  fromCache: boolean;
+}> {
   const { events, meta } = await getEventService().getEventsWithMeta();
-  return { events, todayTruncated: meta.todayTruncated };
+  return { events, todayTruncated: meta.todayTruncated, fromCache: meta.fromCache === true };
 }
 
 /** get() 에서 project 에 넘길 공통 입력을 뽑아낸다 */
@@ -213,8 +230,7 @@ function projectInputFrom(
     | 'statusOverride'
     | 'emergencyAckedAt'
     | 'deviceHealthOverride'
-    | 'realtimeError'
-    | 'lastSyncedAt'
+    | 'eventsSync'
   >,
   now: Date,
 ): ProjectInput {
@@ -225,17 +241,23 @@ function projectInputFrom(
     statusOverride: state.statusOverride,
     emergencyAckedAt: state.emergencyAckedAt,
     deviceHealthOverride: state.deviceHealthOverride,
-    stale: Boolean(state.realtimeError),
-    lastSyncedAt: state.lastSyncedAt,
+    eventsSync: state.eventsSync,
   };
 }
 
-const REALTIME_ERROR_MESSAGE =
-  '최신 정보를 불러오지 못했어요. 화면의 정보가 지금 상태와 다를 수 있어요.';
-
 type StoreSet = (partial: Partial<CareState>) => void;
 
-/** events 실시간 구독을 (다시) 연다. 구독이 실패하면 realtimeError 를 세워 화면에 드러낸다. */
+/** getDocs(init / reload) 결과로 eventsSync 갱신 — 캐시 응답이면 서버 확인 시각을 올리지 않는다. */
+function syncAfterLoad(prev: StreamSync | undefined, fromCache: boolean, now: Date): StreamSync {
+  return applySnapshotSync(prev ?? initialStreamSync(now), { fromCache }, now);
+}
+
+/**
+ * events 실시간 구독을 (다시) 연다.
+ *  - 스냅샷마다 fromCache 로 eventsSync 를 갱신한다 (오프라인 → 서버 복귀 시 자동으로 최신 표시).
+ *  - 구독 오류 시 eventsSync.failed — 자동 복구 없음. reload / AppState active 가 다시 연다.
+ *    failed 는 다시 연 구독의 첫 스냅샷이 올 때까지 유지된다.
+ */
 function startEventsRealtime(set: StoreSet, get: () => CareState): void {
   realtimeUnsub?.();
   realtimeUnsub = undefined;
@@ -243,17 +265,16 @@ function startEventsRealtime(set: StoreSet, get: () => CareState): void {
 
   realtimeUnsub = getEventService().subscribeToEvents(
     (events, meta) => {
-      const lastSyncedAt = new Date().toISOString();
+      const now = new Date();
+      const eventsSync = applySnapshotSync(
+        get().eventsSync ?? initialStreamSync(now),
+        { fromCache: meta?.fromCache === true },
+        now,
+      );
       set({
-        ...project(
-          projectInputFrom(
-            { ...get(), events, realtimeError: undefined, lastSyncedAt },
-            new Date(),
-          ),
-        ),
+        ...project(projectInputFrom({ ...get(), events, eventsSync }, now)),
         todayTruncated: meta?.todayTruncated ?? false,
-        realtimeError: undefined,
-        lastSyncedAt,
+        eventsSync,
         realtime: true,
         ready: true,
         loading: false,
@@ -263,12 +284,12 @@ function startEventsRealtime(set: StoreSet, get: () => CareState): void {
       // 이 구독은 더 이상 갱신되지 않는다 — 마지막 상태로 조용히 멈추지 않게 표시한다.
       realtimeUnsub?.();
       realtimeUnsub = undefined;
+      const now = new Date();
+      const eventsSync = applyStreamFailure(get().eventsSync ?? initialStreamSync(now));
       set({
-        ...project(
-          projectInputFrom({ ...get(), realtimeError: REALTIME_ERROR_MESSAGE }, new Date()),
-        ),
+        ...project(projectInputFrom({ ...get(), eventsSync }, now)),
+        eventsSync,
         realtime: false,
-        realtimeError: REALTIME_ERROR_MESSAGE,
       });
     },
   );
@@ -299,12 +320,13 @@ export const useCareStore = create<CareState>((set, get) => ({
       if (getEventDataSource() === 'memory') {
         await getEventService().seed(buildSeedEvents());
       }
-      const { events, todayTruncated } = await loadEvents();
-      const lastSyncedAt = new Date().toISOString();
+      const { events, todayTruncated, fromCache } = await loadEvents();
+      const now = new Date();
+      const eventsSync = syncAfterLoad(get().eventsSync, fromCache, now);
       set({
-        ...project(projectInputFrom({ ...get(), events, lastSyncedAt }, new Date())),
+        ...project(projectInputFrom({ ...get(), events, eventsSync }, now)),
         todayTruncated,
-        lastSyncedAt,
+        eventsSync,
         ready: true,
         loading: false,
       });
@@ -346,7 +368,7 @@ export const useCareStore = create<CareState>((set, get) => ({
         // 백그라운드 복귀 직후: 날짜가 바뀌었으면 "오늘" 창을 즉시 옮기고(60초 타이머를
         // 기다리지 않는다), 실시간 구독이 끊겨 있으면 다시 연다.
         getEventService().refreshDayWindow();
-        if (get().realtimeError) startEventsRealtime(set, get);
+        if (get().eventsSync?.failed) startEventsRealtime(set, get);
         get().refreshDerived();
       });
     }
@@ -355,23 +377,19 @@ export const useCareStore = create<CareState>((set, get) => ({
   reload: async () => {
     set({ loading: true, loadError: undefined });
     try {
-      const { events, todayTruncated } = await loadEvents();
-      const lastSyncedAt = new Date().toISOString();
-      const hadRealtimeError = Boolean(get().realtimeError);
+      const { events, todayTruncated, fromCache } = await loadEvents();
+      const now = new Date();
+      const wasFailed = Boolean(get().eventsSync?.failed);
+      // 서버 응답이면 최신으로 돌아오고(failed 해제), 캐시 응답이면 오프라인 상태가 유지된다.
+      const eventsSync = syncAfterLoad(get().eventsSync, fromCache, now);
       set({
-        ...project(
-          projectInputFrom(
-            { ...get(), events, realtimeError: undefined, lastSyncedAt },
-            new Date(),
-          ),
-        ),
+        ...project(projectInputFrom({ ...get(), events, eventsSync }, now)),
         todayTruncated,
-        realtimeError: undefined,
-        lastSyncedAt,
+        eventsSync,
         loading: false,
       });
-      // 끊긴 실시간 구독은 새로 연다 (다시 실패하면 realtimeError 가 다시 선다).
-      if (hadRealtimeError) startEventsRealtime(set, get);
+      // 끊긴 실시간 구독은 새로 연다 (다시 실패하면 failed 가 다시 선다).
+      if (wasFailed) startEventsRealtime(set, get);
     } catch (error) {
       if (__DEV__) console.error('[별일없지] reload 실패', error);
       set({
@@ -446,8 +464,7 @@ export const useCareStore = create<CareState>((set, get) => ({
       deviceHealthOverride: undefined,
       emergencyAckedAt: undefined,
       todayTruncated: false,
-      realtimeError: undefined,
-      lastSyncedAt: undefined,
+      eventsSync: undefined,
     });
   },
 }));
