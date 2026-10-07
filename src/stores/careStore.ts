@@ -48,7 +48,11 @@ import { deriveCareStatus, applyStatusOverride } from '../services/careStatus';
 import { deriveDeviceHealth } from '../services/deviceHealth';
 import { careStatusConfig } from '../config/careStatusConfig';
 import { DEV_DEVICE_ID } from '../config/careContext';
-import { presentHome, type CareStatusText } from '../utils/careStatusText';
+import {
+  presentHome,
+  presentStaleHome,
+  type CareStatusText,
+} from '../utils/careStatusText';
 import { buildSeedEvents } from '../mock/seedEvents';
 import { mockCareTarget, type CareTarget } from '../mock/careTarget';
 
@@ -84,6 +88,10 @@ interface ProjectInput {
   emergencyAckedAt?: number;
   /** [개발용] 기기 축 자동 판정을 덮어쓴다 */
   deviceHealthOverride?: DeviceHealth;
+  /** 실시간 갱신이 끊겼는가 — true 면 Hero 를 "최신 정보 아님" 문구로 바꾼다 (presentStaleHome) */
+  stale?: boolean;
+  /** 마지막으로 이벤트를 성공적으로 받은 시각 (ISO) */
+  lastSyncedAt?: string;
 }
 
 interface CareState extends DerivedSlice {
@@ -99,6 +107,14 @@ interface CareState extends DerivedSlice {
    * true 면 오늘 활동 수는 하한값("N회 이상"), 첫 활동 시각은 알 수 없다.
    */
   todayTruncated: boolean;
+  /**
+   * 사용 중 실시간 이벤트 구독이 실패해 화면이 더 이상 갱신되지 않는 상태의 사용자 문구.
+   * 있으면 Hero 는 확정 표현 대신 "최신 정보를 불러오지 못했어요" 를 쓴다 (EMERGENCY 는 유지).
+   * 재구독(reload / AppState active)이 성공해 새 데이터를 받으면 지워진다.
+   */
+  realtimeError?: string;
+  /** 마지막으로 이벤트를 성공적으로 받은 시각 (ISO) */
+  lastSyncedAt?: string;
 
   /** 원격 devices/{id} 문서 (Firestore 모드). 없으면 undefined. */
   deviceDoc?: DeviceDoc;
@@ -172,7 +188,13 @@ function project(input: ProjectInput): DerivedSlice {
     careStatus: derived,
     deviceHealth,
     status: effectivePerson.status,
-    statusText: presentHome(effectivePerson, effectiveDeviceHealth, now),
+    statusText: input.stale
+      ? presentStaleHome(
+          presentHome(effectivePerson, effectiveDeviceHealth, now),
+          effectivePerson,
+          input.lastSyncedAt,
+        )
+      : presentHome(effectivePerson, effectiveDeviceHealth, now),
     statusOverride: overrideActive ? input.statusOverride : undefined,
   };
 }
@@ -186,7 +208,13 @@ async function loadEvents(): Promise<{ events: CareEvent[]; todayTruncated: bool
 function projectInputFrom(
   state: Pick<
     CareState,
-    'events' | 'deviceDoc' | 'statusOverride' | 'emergencyAckedAt' | 'deviceHealthOverride'
+    | 'events'
+    | 'deviceDoc'
+    | 'statusOverride'
+    | 'emergencyAckedAt'
+    | 'deviceHealthOverride'
+    | 'realtimeError'
+    | 'lastSyncedAt'
   >,
   now: Date,
 ): ProjectInput {
@@ -197,7 +225,54 @@ function projectInputFrom(
     statusOverride: state.statusOverride,
     emergencyAckedAt: state.emergencyAckedAt,
     deviceHealthOverride: state.deviceHealthOverride,
+    stale: Boolean(state.realtimeError),
+    lastSyncedAt: state.lastSyncedAt,
   };
+}
+
+const REALTIME_ERROR_MESSAGE =
+  '최신 정보를 불러오지 못했어요. 화면의 정보가 지금 상태와 다를 수 있어요.';
+
+type StoreSet = (partial: Partial<CareState>) => void;
+
+/** events 실시간 구독을 (다시) 연다. 구독이 실패하면 realtimeError 를 세워 화면에 드러낸다. */
+function startEventsRealtime(set: StoreSet, get: () => CareState): void {
+  realtimeUnsub?.();
+  realtimeUnsub = undefined;
+  if (!getEventService().supportsRealtime()) return;
+
+  realtimeUnsub = getEventService().subscribeToEvents(
+    (events, meta) => {
+      const lastSyncedAt = new Date().toISOString();
+      set({
+        ...project(
+          projectInputFrom(
+            { ...get(), events, realtimeError: undefined, lastSyncedAt },
+            new Date(),
+          ),
+        ),
+        todayTruncated: meta?.todayTruncated ?? false,
+        realtimeError: undefined,
+        lastSyncedAt,
+        realtime: true,
+        ready: true,
+        loading: false,
+      });
+    },
+    () => {
+      // 이 구독은 더 이상 갱신되지 않는다 — 마지막 상태로 조용히 멈추지 않게 표시한다.
+      realtimeUnsub?.();
+      realtimeUnsub = undefined;
+      set({
+        ...project(
+          projectInputFrom({ ...get(), realtimeError: REALTIME_ERROR_MESSAGE }, new Date()),
+        ),
+        realtime: false,
+        realtimeError: REALTIME_ERROR_MESSAGE,
+      });
+    },
+  );
+  set({ realtime: Boolean(realtimeUnsub) });
 }
 
 export const useCareStore = create<CareState>((set, get) => ({
@@ -225,9 +300,11 @@ export const useCareStore = create<CareState>((set, get) => ({
         await getEventService().seed(buildSeedEvents());
       }
       const { events, todayTruncated } = await loadEvents();
+      const lastSyncedAt = new Date().toISOString();
       set({
-        ...project(projectInputFrom({ ...get(), events }, new Date())),
+        ...project(projectInputFrom({ ...get(), events, lastSyncedAt }, new Date())),
         todayTruncated,
+        lastSyncedAt,
         ready: true,
         loading: false,
       });
@@ -242,17 +319,7 @@ export const useCareStore = create<CareState>((set, get) => ({
     }
 
     // events 실시간 구독 (최초 1회)
-    if (!realtimeUnsub && getEventService().supportsRealtime()) {
-      realtimeUnsub = getEventService().subscribeToEvents((events, meta) => {
-        set({
-          ...project(projectInputFrom({ ...get(), events }, new Date())),
-          todayTruncated: meta?.todayTruncated ?? false,
-          ready: true,
-          loading: false,
-        });
-      });
-      set({ realtime: Boolean(realtimeUnsub) });
-    }
+    if (!realtimeUnsub) startEventsRealtime(set, get);
 
     // devices/{id} 문서 구독 (Firestore 모드, 최초 1회)
     const deviceRepo = getDeviceRepo();
@@ -275,7 +342,12 @@ export const useCareStore = create<CareState>((set, get) => ({
     // 포그라운드 복귀 시 즉시 1회 재계산
     if (!appStateSub) {
       appStateSub = AppState.addEventListener('change', (next) => {
-        if (next === 'active') get().refreshDerived();
+        if (next !== 'active') return;
+        // 백그라운드 복귀 직후: 날짜가 바뀌었으면 "오늘" 창을 즉시 옮기고(60초 타이머를
+        // 기다리지 않는다), 실시간 구독이 끊겨 있으면 다시 연다.
+        getEventService().refreshDayWindow();
+        if (get().realtimeError) startEventsRealtime(set, get);
+        get().refreshDerived();
       });
     }
   },
@@ -284,11 +356,22 @@ export const useCareStore = create<CareState>((set, get) => ({
     set({ loading: true, loadError: undefined });
     try {
       const { events, todayTruncated } = await loadEvents();
+      const lastSyncedAt = new Date().toISOString();
+      const hadRealtimeError = Boolean(get().realtimeError);
       set({
-        ...project(projectInputFrom({ ...get(), events }, new Date())),
+        ...project(
+          projectInputFrom(
+            { ...get(), events, realtimeError: undefined, lastSyncedAt },
+            new Date(),
+          ),
+        ),
         todayTruncated,
+        realtimeError: undefined,
+        lastSyncedAt,
         loading: false,
       });
+      // 끊긴 실시간 구독은 새로 연다 (다시 실패하면 realtimeError 가 다시 선다).
+      if (hadRealtimeError) startEventsRealtime(set, get);
     } catch (error) {
       if (__DEV__) console.error('[별일없지] reload 실패', error);
       set({
@@ -363,6 +446,8 @@ export const useCareStore = create<CareState>((set, get) => ({
       deviceHealthOverride: undefined,
       emergencyAckedAt: undefined,
       todayTruncated: false,
+      realtimeError: undefined,
+      lastSyncedAt: undefined,
     });
   },
 }));

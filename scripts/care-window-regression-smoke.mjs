@@ -40,6 +40,9 @@ import {
 import { deriveEventViews } from '../src/services/eventViews.ts';
 import { deriveCareStatus } from '../src/services/careStatus.ts';
 import { buildTodayActivitySummary } from '../src/utils/todayActivity.ts';
+import { createEventWindowSubscription, rollTodayWindow } from '../src/services/eventWindow.ts';
+import { presentHome, presentStaleHome } from '../src/utils/careStatusText.ts';
+import fs from 'node:fs';
 
 const tests = [];
 const check = (name, fn) => tests.push({ name, fn });
@@ -454,6 +457,240 @@ check('A11. truncated 옵션 미지정 = 기존 동작 (countText / truncated=fa
   assert.equal(s.countText, '3회');
   assert.equal(s.truncated, false);
   assert.equal(s.text, '3번 · 오전 9:00 ~ 오전 9:02');
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+//  앱 — 구독 조정 (createEventWindowSubscription): 오류 / 날짜 전환
+// ═══════════════════════════════════════════════════════════════════════
+
+/** onSnapshot 대역. push(events) / fail(err) 로 스냅샷·오류를 흘려보낸다. */
+function fakeSource() {
+  const h = { opened: 0, unsubscribed: 0, onNext: null, onError: null };
+  h.source = (onNext, onError) => {
+    h.opened += 1;
+    h.onNext = onNext;
+    h.onError = onError;
+    return () => {
+      h.unsubscribed += 1;
+    };
+  };
+  h.push = (events) => h.onNext(newestFirst(events));
+  h.fail = (err = new Error('permission-denied')) => h.onError(err);
+  return h;
+}
+
+function harness({ now, cap } = {}) {
+  const recent = fakeSource();
+  const sos = fakeSource();
+  const todays = []; // 날짜별 today 구독 { dayStart, h }
+  const emitted = [];
+  const errors = [];
+  let clock = now ?? APP_NOW;
+  const sub = createEventWindowSubscription({
+    recent: recent.source,
+    latestSos: sos.source,
+    today: (dayStart) => {
+      const h = fakeSource();
+      todays.push({ dayStart, h });
+      return h.source;
+    },
+    listener: (events, meta) => emitted.push({ events, meta }),
+    onError: (error, source) => errors.push({ error, source }),
+    now: () => clock,
+    cap,
+  });
+  return {
+    sub,
+    recent,
+    sos,
+    todays,
+    today: () => todays[todays.length - 1].h,
+    emitted,
+    errors,
+    setNow: (d) => {
+      clock = d;
+    },
+  };
+}
+
+check('W1. 세 구독이 모두 첫 결과를 받기 전에는 listener 를 부르지 않는다', () => {
+  const t = harness();
+  t.recent.push(todayMotions(3));
+  t.today().push(todayMotions(3));
+  assert.equal(t.emitted.length, 0, 'sos 결과 전에는 내보내지 않는다 (NORMAL→EMERGENCY 깜박임 방지)');
+  t.sos.push([]);
+  assert.equal(t.emitted.length, 1);
+  assert.equal(t.emitted[0].meta.todayTruncated, false);
+});
+
+check('W2. 첫 스냅샷 이후 sos 구독 오류 → onError 1회, 이후 다른 구독 갱신이 와도 listener 호출 안 함', () => {
+  const t = harness();
+  t.recent.push(todayMotions(3));
+  t.today().push(todayMotions(3));
+  t.sos.push([]);
+  assert.equal(t.emitted.length, 1);
+
+  t.sos.fail();
+  assert.equal(t.errors.length, 1);
+  assert.equal(t.errors[0].source, 'latestSos');
+
+  // 멈춘 SOS 조각과 새 조각을 섞어 "별일 없어요" 를 계속 갱신하면 안 된다
+  t.recent.push(todayMotions(10));
+  t.today().push(todayMotions(10));
+  assert.equal(t.emitted.length, 1, '실패 후에는 listener 가 호출되지 않는다');
+});
+
+check('W3. 여러 구독이 연달아 실패해도 onError 는 한 번만', () => {
+  const t = harness();
+  t.recent.push([]);
+  t.today().push([]);
+  t.sos.push([]);
+  t.today().fail();
+  t.recent.fail();
+  assert.equal(t.errors.length, 1);
+  assert.equal(t.errors[0].source, 'today');
+});
+
+check('W4. 첫 스냅샷 전 오류도 onError 로 드러난다 (조용히 대기 상태로 남지 않음)', () => {
+  const t = harness();
+  t.recent.push([]);
+  t.today().fail();
+  assert.equal(t.errors.length, 1);
+  assert.equal(t.emitted.length, 0);
+});
+
+check('W5. unsubscribe → 세 구독 모두 해제, 이후 콜백(스냅샷/오류) 무시', () => {
+  const t = harness();
+  t.sub.unsubscribe();
+  assert.equal(t.recent.unsubscribed, 1);
+  assert.equal(t.sos.unsubscribed, 1);
+  assert.equal(t.today().unsubscribed, 1);
+  t.recent.push([]);
+  t.today().push([]);
+  t.sos.push([]);
+  t.sos.fail();
+  assert.equal(t.emitted.length, 0);
+  assert.equal(t.errors.length, 0);
+});
+
+check('W6. checkDayRollover — 같은 날이면 false, today 구독을 다시 열지 않는다', () => {
+  const t = harness();
+  assert.equal(t.sub.checkDayRollover(), false);
+  assert.equal(t.todays.length, 1);
+  assert.equal(t.todays[0].dayStart.getTime(), startOfLocalDay(APP_NOW).getTime());
+});
+
+check('W7. 날짜 변경(백그라운드 복귀) → 즉시 어제 이벤트·어제 잘림 표시를 걷어내고 새 자정으로 재구독', () => {
+  // 어제 22시: 오늘(=어제) 이벤트 2100건 → 잘림
+  const t = harness({ now: APP_NOW });
+  const yesterdayMany = todayMotions(2100, { startH: 6, prefix: 'y' });
+  t.recent.push(yesterdayMany);
+  t.today().push(yesterdayMany);
+  t.sos.push([]);
+  assert.equal(t.emitted.at(-1).meta.todayTruncated, true);
+
+  // 다음 날 08:00 복귀 (60초 타이머가 아직 안 돌았다고 가정 — AppState active 경로)
+  const nextMorning = new Date(startOfLocalDay(APP_NOW).getTime() + 32 * HOUR);
+  t.setNow(nextMorning);
+  assert.equal(t.sub.checkDayRollover(), true);
+
+  assert.equal(t.todays[0].h.unsubscribed, 1, '이전 today 구독 해제');
+  assert.equal(t.todays.length, 2, '새 today 구독');
+  assert.equal(t.todays[1].dayStart.getTime(), startOfLocalDay(nextMorning).getTime());
+
+  const last = t.emitted.at(-1);
+  assert.equal(last.meta.todayTruncated, false, '어제의 잘림 표시가 오늘로 이어지지 않는다');
+  const views = deriveEventViews(last.events, nextMorning);
+  assert.equal(views.todayEvents.length, 0, '어제 이벤트가 오늘로 보이지 않는다');
+  assert.ok(views.lastActivity, '마지막 활동(recent)은 유지');
+
+  assert.equal(t.sub.checkDayRollover(), false, '같은 날 두 번째 확인은 no-op');
+});
+
+check('W8. rollTodayWindow — 이전 창이 전부 새 날짜면 잘림 유지, 경계가 어제 쪽이면 잘림 해제', () => {
+  const dayStart = startOfLocalDay(APP_NOW).getTime();
+  const allToday = newestFirst(todayMotions(6, { startH: 9 }));
+  assert.equal(capTodayEvents(rollTodayWindow(allToday, dayStart), 5).truncated, true);
+
+  const mixed = newestFirst([
+    ...todayMotions(3, { startH: 9 }),
+    appEvent('yy', 'motion_detected', new Date(dayStart - 1000)),
+    appEvent('yz', 'motion_detected', new Date(dayStart - 2000)),
+    appEvent('ya', 'motion_detected', new Date(dayStart - 3000)),
+  ]);
+  const rolled = rollTodayWindow(mixed, dayStart);
+  assert.equal(rolled.length, 3);
+  assert.equal(capTodayEvents(rolled, 5).truncated, false);
+});
+
+// ── 화면 표시: 실시간 갱신이 끊겼을 때 (presentStaleHome) ────────────────
+
+const personResult = (over) => ({
+  systemHealth: 'ok',
+  computedAt: APP_NOW.toISOString(),
+  lastActivityAt: new Date(APP_NOW.getTime() - 5 * MIN).toISOString(),
+  minutesSinceActivity: 5,
+  ...over,
+});
+const LAST_SYNC = localAt(APP_NOW, 21, 40).toISOString();
+
+check('P1. 끊김 + NORMAL → "별일 없어요" 대신 중립 "최신 정보를 불러오지 못했어요" + 마지막 확인 시각', () => {
+  const person = personResult({ status: 'NORMAL', reason: 'recent_activity' });
+  const base = presentHome(person, 'online', APP_NOW);
+  assert.equal(base.headline, '오늘도 별일 없어요', '전제');
+  const t = presentStaleHome(base, person, LAST_SYNC);
+  assert.equal(t.tone, 'neutral');
+  assert.equal(t.headline, '최신 정보를 불러오지 못했어요');
+  assert.ok(!t.headline.includes('별일 없어요') && !t.detail.includes('별일 없어요'));
+  assert.match(t.detail, /오후 9:40까지 확인한 정보예요/);
+});
+
+check('P2. 끊김 + CHECK / 기기 offline → 역시 중립 문구 (확정 표현 금지)', () => {
+  const chk = personResult({ status: 'CHECK', reason: 'inactivity', minutesSinceActivity: 200 });
+  assert.equal(presentStaleHome(presentHome(chk, 'online', APP_NOW), chk, LAST_SYNC).tone, 'neutral');
+  const normal = personResult({ status: 'NORMAL', reason: 'recent_activity' });
+  const off = presentStaleHome(presentHome(normal, 'offline', APP_NOW), normal, undefined);
+  assert.equal(off.tone, 'neutral');
+  assert.equal(off.headline, '최신 정보를 불러오지 못했어요');
+});
+
+check('P3. 끊김 + EMERGENCY → EMERGENCY 는 숨기지 않고 "최신 정보 아님" 만 덧붙인다', () => {
+  const emg = personResult({
+    status: 'EMERGENCY',
+    reason: 'sos',
+    emergencyEventAt: localAt(APP_NOW, 21, 0).toISOString(),
+  });
+  const base = presentHome(emg, 'online', APP_NOW);
+  const t = presentStaleHome(base, emg, LAST_SYNC);
+  assert.equal(t.tone, 'emergency');
+  assert.equal(t.headline, base.headline);
+  assert.ok(t.detail.startsWith(base.detail));
+  assert.match(t.detail, /최신 정보를 불러오지 못하고 있어요/);
+});
+
+// ── 정적 검사: careStore 연결 (RN 런타임 없이 확인 가능한 범위) ──────────
+const careStoreSrc = fs.readFileSync(new URL('../src/stores/careStore.ts', import.meta.url), 'utf8');
+
+check('static. careStore — 구독 onError 가 realtimeError 를 세우고 Hero 가 stale 로 계산된다', () => {
+  const start = careStoreSrc.indexOf('function startEventsRealtime');
+  assert.ok(start > 0, 'startEventsRealtime 존재');
+  const body = careStoreSrc.slice(start, careStoreSrc.indexOf('\n}\n', start));
+  assert.match(
+    body,
+    /subscribeToEvents\(\s*\(events, meta\) =>[\s\S]*?\},\s*\(\) => \{[\s\S]*realtimeError: REALTIME_ERROR_MESSAGE/,
+  );
+  assert.match(careStoreSrc, /stale: Boolean\(state\.realtimeError\)/);
+  assert.match(careStoreSrc, /input\.stale\s*\?\s*presentStaleHome\(/);
+});
+
+check('static. careStore — AppState active: refreshDayWindow() → (끊김이면 재구독) → refreshDerived()', () => {
+  const i = careStoreSrc.indexOf("AppState.addEventListener('change'");
+  assert.ok(i > 0);
+  const handler = careStoreSrc.slice(i, careStoreSrc.indexOf('});', i));
+  const a = handler.indexOf('refreshDayWindow()');
+  const b = handler.indexOf('startEventsRealtime(set, get)');
+  const c = handler.indexOf('refreshDerived()');
+  assert.ok(a > 0 && b > a && c > b, '순서: 날짜 창 이동 → 재구독 → 재계산');
 });
 
 // ── run ────────────────────────────────────────────────────────────────

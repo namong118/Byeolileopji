@@ -92,8 +92,16 @@ export class EventService {
    * 실시간 구독. 지원하지 않으면 undefined.
    * listener 는 항상 "최신 우선 전체 목록" 을 받는다.
    */
-  subscribeToEvents(listener: EventsListener): Unsubscribe | undefined {
-    return this.repo.subscribeToEvents?.(listener);
+  subscribeToEvents(
+    listener: EventsListener,
+    onError?: (error: unknown) => void,
+  ): Unsubscribe | undefined {
+    return this.repo.subscribeToEvents?.(listener, onError);
+  }
+
+  /** 로컬 날짜가 바뀌었으면 "오늘" 조회 창을 즉시 옮긴다. 지원하지 않는 저장소는 no-op. */
+  refreshDayWindow(): void {
+    this.repo.refreshDayWindow?.();
   }
 }
 

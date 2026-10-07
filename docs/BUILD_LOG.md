@@ -1970,3 +1970,29 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
 3. **Worker 배포** — `wrangler deploy`. `wrangler tail` 에서 다음 Cron 의
    `[care-status] scheduled compute ok` 와 ingest `ingest created event … (motion_detected …)` 확인.
 4. **앱 빌드 / 배포** — 홈 "오늘 활동", Timeline, 개발자 탭 상태 확인.
+
+### 후속 보완 — 사용 중 구독 오류 노출 + 백그라운드 복귀 시 날짜 재확인
+
+- **문제 A**: 첫 스냅샷 이후 세 events 리스너 중 하나가 오류를 내면 `__DEV__` 로그만 남고
+  화면은 마지막 상태(예: "오늘도 별일 없어요")로 **조용히 멈췄다.** 나머지 두 리스너가 계속
+  갱신되면 멈춘 SOS 조각과 새 조각이 섞인 목록으로 판정될 수도 있었다.
+- **문제 B**: 1단계 계획의 "AppState active 시 날짜 재확인" 이 빠져 있었다 — 60초 타이머만
+  있어, 백그라운드 복귀 직후 전날 기준 today 창(및 전날 잘림 표시)이 남을 수 있었다.
+- **변경**
+  - 구독 조정을 `eventWindow.createEventWindowSubscription()` (순수, Firestore 비의존)으로
+    분리. 어느 구독이든 오류 → **실패 상태 고정** + `onError` 1회, 이후 listener 호출 없음.
+  - `careStore.realtimeError` / `lastSyncedAt`. 오류 시 홈·Timeline 에 오류 배너
+    ("최신 정보를 불러오지 못했어요…"), Timeline 에 "다시 불러오기". Hero 는
+    `presentStaleHome()` — NORMAL/CHECK/기기 offline 은 중립 톤 "최신 정보를 불러오지
+    못했어요" + 마지막 확인 시각, **EMERGENCY 는 숨기지 않고** "최신 정보 아님" 만 덧붙인다.
+  - 복구: `reload()` 성공 또는 AppState active 시 실시간 구독을 다시 연다. 새 데이터를 받으면
+    `realtimeError` 가 지워진다.
+  - AppState active → `eventService.refreshDayWindow()` → (끊김이면 재구독) → `refreshDerived()`.
+    날짜가 바뀌었으면 이전 today 결과에서 새 날짜 이벤트만 남겨(`rollTodayWindow`) **즉시**
+    내보내고 새 자정 기준으로 재구독한다.
+- **검증**: `care-window-regression-smoke.mjs` 20 → 33 checks (W1–W8 구독 조정 / 날짜 전환,
+  P1–P3 stale 표시, careStore 연결 정적 검사 2).
+- **미검증**: 실기기에서 실제 리스너 오류(네트워크 끊김 / 권한 변경) → 배너 표시 → 복구,
+  백그라운드 장시간 후 자정 넘어 복귀. careStore 의 RN 연결부는 정적 검사로만 확인했다.
+- **알려진 한계**: `devices/{id}` 구독(`deviceRepository.ts`)도 오류 시 로그만 남기고
+  마지막 기기 상태로 멈춘다 (이번 변경 이전부터 있던 동작, 이번 범위 밖).

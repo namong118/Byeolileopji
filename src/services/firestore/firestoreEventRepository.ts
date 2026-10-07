@@ -42,10 +42,12 @@ import {
 } from '../eventRepository';
 import {
   combineEventWindows,
+  createEventWindowSubscription,
   RECENT_EVENTS_LIMIT,
   startOfLocalDay,
   TODAY_EVENTS_SAFETY_CAP,
-  type EventWindowParts,
+  type EventWindowSource,
+  type EventWindowSubscription,
 } from '../eventWindow';
 import {
   docToCareEvent,
@@ -182,65 +184,56 @@ export class FirestoreEventRepository implements EventRepository {
     }
   }
 
-  /**
-   * 세 쿼리를 각각 onSnapshot 으로 구독하고, 합집합을 listener 에 전달한다.
-   *
-   * - 세 구독이 **모두 첫 스냅샷을 받은 뒤에만** 전달한다. 일부만 도착한 상태로 내보내면
-   *   SOS 가 아직 없는 목록으로 NORMAL → EMERGENCY 가 깜박이거나 오늘 활동 수가 잠깐 작게 보인다.
-   *   (어느 구독이든 오류가 나면 그 이후 갱신은 멈춘다 — init 시의 listEvents 결과 또는
-   *    loadError 가 화면에 남는다. SOS 없이 판정한 목록을 내보내지 않는다.)
-   * - 로컬 날짜가 바뀌면 today 구독을 새 자정 기준으로 다시 연다.
-   */
-  subscribeToEvents(listener: EventsListener): Unsubscribe {
-    const parts: Partial<EventWindowParts> = {};
+  /** 현재 열린 구독들 — refreshDayWindow() 가 날짜 변경을 즉시 반영할 대상 */
+  private readonly activeSubscriptions = new Set<EventWindowSubscription>();
 
-    const emit = () => {
-      if (!parts.recent || !parts.today || !parts.latestSos) return;
-      const r = combineEventWindows(parts as EventWindowParts);
-      listener(r.events, { todayTruncated: r.todayTruncated });
-    };
-
-    const subscribe = (
-      q: Query,
-      key: keyof EventWindowParts,
-      label: string,
-    ): Unsubscribe =>
+  private source(q: Query, label: string): EventWindowSource {
+    return (onNext, onError) =>
       onSnapshot(
         q,
-        (snap) => {
-          parts[key] = FirestoreEventRepository.mapAll(snap);
-          emit();
-        },
+        (snap) => onNext(FirestoreEventRepository.mapAll(snap)),
         (error) => {
           if (__DEV__) {
             console.error(`[별일없지] Firestore 실시간 구독 오류 (${label})`, error);
           }
+          onError(error);
         },
       );
+  }
 
-    const unsubRecent = subscribe(this.buildRecentQuery(), 'recent', 'recent');
-    const unsubSos = subscribe(this.buildLatestSosQuery(), 'latestSos', 'sos');
-
-    let dayStartMs = startOfLocalDay(new Date()).getTime();
-    let unsubToday = subscribe(this.buildTodayQuery(new Date(dayStartMs)), 'today', 'today');
-
-    const rolloverTimer = setInterval(() => {
-      const next = startOfLocalDay(new Date()).getTime();
-      if (next === dayStartMs) return;
-      dayStartMs = next;
-      unsubToday();
-      // 전날 결과(및 전날 truncated)를 버린다. 새 스냅샷 전에 recent/sos 가 먼저 갱신돼도
-      // 자정 직후 오늘 이벤트는 recent 100건 안에 모두 있으므로 집계가 틀리지 않는다.
-      parts.today = [];
-      unsubToday = subscribe(this.buildTodayQuery(new Date(dayStartMs)), 'today', 'today');
-    }, DAY_ROLLOVER_CHECK_MS);
+  /**
+   * 세 쿼리를 각각 onSnapshot 으로 구독하고, 합집합을 listener 에 전달한다.
+   * 조정 규칙(첫 스냅샷 대기 / 오류 시 실패 고정 / 날짜 전환)은
+   * eventWindow.createEventWindowSubscription — Node 스모크로 검증된다.
+   *
+   * - 어느 구독이든 오류가 나면 onError 가 한 번 호출되고 이후 listener 는 호출되지 않는다.
+   *   (마지막 상태로 조용히 멈추지 않는다 — careStore 가 realtimeError 로 화면에 드러낸다.)
+   * - 로컬 날짜 변경은 DAY_ROLLOVER_CHECK_MS 주기 + refreshDayWindow()(AppState active)로 반영한다.
+   */
+  subscribeToEvents(
+    listener: EventsListener,
+    onError?: (error: unknown) => void,
+  ): Unsubscribe {
+    const sub = createEventWindowSubscription({
+      recent: this.source(this.buildRecentQuery(), 'recent'),
+      today: (dayStart) => this.source(this.buildTodayQuery(dayStart), 'today'),
+      latestSos: this.source(this.buildLatestSosQuery(), 'sos'),
+      listener,
+      onError: (error) => onError?.(error),
+    });
+    this.activeSubscriptions.add(sub);
+    const rolloverTimer = setInterval(() => sub.checkDayRollover(), DAY_ROLLOVER_CHECK_MS);
 
     return () => {
       clearInterval(rolloverTimer);
-      unsubRecent();
-      unsubToday();
-      unsubSos();
+      this.activeSubscriptions.delete(sub);
+      sub.unsubscribe();
     };
+  }
+
+  /** 로컬 날짜가 바뀌었으면 열린 구독의 today 창을 즉시 새 자정 기준으로 옮긴다. */
+  refreshDayWindow(): void {
+    for (const sub of this.activeSubscriptions) sub.checkDayRollover();
   }
 }
 

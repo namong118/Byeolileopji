@@ -159,3 +159,40 @@ export function presentHome(
   //    (unknown 자체는 장애가 아니다 — 우리가 받은 이벤트를 무효화하지 않는다)
   return presentCareStatus(careStatus, now);
 }
+
+/**
+ * 실시간 갱신이 끊겼을 때(careStore.realtimeError) Hero 문구.
+ *
+ * 보호자 앱에서는 **오래된 "오늘도 별일 없어요" 가 에러 화면보다 위험하다.** 그래서:
+ *  - EMERGENCY 는 숨기지 않는다 (오래된 EMERGENCY 를 지우는 쪽이 더 위험) — 문구는 유지하고
+ *    "최신 정보가 아니다" 를 detail 에 덧붙인다.
+ *  - 그 외(NORMAL / CHECK / no_data / 기기 offline) 는 확정 표현을 쓰지 않고 중립 톤으로
+ *    "최신 정보를 불러오지 못했어요" 를 보여준다. 마지막으로 확인한 시각이 있으면 함께.
+ *
+ * @param base       presentHome() 결과 (마지막으로 받은 데이터 기준)
+ * @param careStatus effective 사람-축 결과
+ * @param lastSyncedAt 마지막으로 이벤트를 성공적으로 받은 시각 (ISO)
+ */
+export function presentStaleHome(
+  base: CareStatusText,
+  careStatus: CareStatusResult,
+  lastSyncedAt: string | undefined,
+): CareStatusText {
+  const asOf = lastSyncedAt ? `${clock(lastSyncedAt)}까지 확인한 정보예요.` : '';
+
+  if (careStatus.status === 'EMERGENCY') {
+    return {
+      ...base,
+      detail: `${base.detail} 최신 정보를 불러오지 못하고 있어요.${asOf ? ` ${asOf}` : ''}`,
+    };
+  }
+
+  return {
+    tone: 'neutral',
+    emoji: '⚪',
+    headline: '최신 정보를 불러오지 못했어요',
+    detail: asOf
+      ? `${asOf} 지금 상태는 연결이 회복되면 다시 보여드릴게요.`
+      : '지금 상태는 연결이 회복되면 다시 보여드릴게요.',
+  };
+}

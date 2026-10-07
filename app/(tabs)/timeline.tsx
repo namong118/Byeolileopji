@@ -20,6 +20,7 @@ export default function TimelineScreen() {
   const todayTruncated = useCareStore((s) => s.todayTruncated);
   const loading = useCareStore((s) => s.loading);
   const loadError = useCareStore((s) => s.loadError);
+  const realtimeError = useCareStore((s) => s.realtimeError);
   const reload = useCareStore((s) => s.reload);
 
   const today = useMemo(() => formatKoreanDate(new Date()), []);
@@ -65,6 +66,17 @@ export default function TimelineScreen() {
       {loading && todayEvents.length === 0 ? (
         <View style={styles.notice}>
           <Notice message="오늘의 기록을 불러오고 있어요." />
+        </View>
+      ) : null}
+
+      {!loadError && realtimeError ? (
+        <View style={styles.notice}>
+          <Notice message={realtimeError} tone="error" />
+          <PressableButton
+            label="다시 불러오기"
+            onPress={() => void reload()}
+            style={styles.retry}
+          />
         </View>
       ) : null}
 

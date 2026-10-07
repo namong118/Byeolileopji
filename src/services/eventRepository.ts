@@ -46,7 +46,13 @@ export interface EventRepository {
    * 구독 즉시 현재 스냅샷으로 한 번 호출되고, 이후 변경마다 호출된다.
    * 반환된 함수로 구독을 해제한다.
    */
-  subscribeToEvents?(listener: EventsListener): Unsubscribe;
+  subscribeToEvents?(
+    listener: EventsListener,
+    /** 구독이 실패해 더 이상 갱신되지 않게 됐을 때 한 번 호출된다 (조용히 멈추지 않기 위해). */
+    onError?: (error: unknown) => void,
+  ): Unsubscribe;
+  /** (선택) 로컬 날짜가 바뀌었으면 "오늘" 조회 창을 즉시 옮긴다 (AppState active 등). */
+  refreshDayWindow?(): void;
 }
 
 /** 저장소 계층에서 발생한 오류. 사용자용 메시지는 UI 레이어에서 만든다. */
