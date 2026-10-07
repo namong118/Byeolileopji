@@ -21,7 +21,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/android-icon-foreground.png"
     },
     "plugins": [
       "expo-router",
@@ -31,8 +31,8 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#FFF9EE",
-          "image": "./assets/splash-icon.png",
-          "imageWidth": 170,
+          "image": "./assets/android-icon-foreground.png",
+          "imageWidth": 310,
           "resizeMode": "contain"
         }
       ]
