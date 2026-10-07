@@ -1864,3 +1864,109 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
 - recovery 상태 전환(예: `CHECK → NORMAL`)에서 알림 수신 확인.
 - `CHECK` + 기기 offline 이 동시에 발생하는 전환에서도 중복 알림 없이 단일 알림 수신 확인.
 - Cloudflare Worker → FCM → Android 실기기까지 이어지는 실제 알림 전달 경로 검증 완료.
+
+---
+
+## Fix — 조회 창(최근 N건) vs 시간 기준 판정 불일치 + 미등록 deviceType 우회 차단
+
+> 커밋: `756253c` (deviceType), `a075503` (조회 창). 운영 배포(인덱스 / Worker / 앱)는
+> 이 기록 시점에 **아직 수행하지 않았다** — 아래 "운영 배포 체크리스트" 참고.
+
+### 문제 1 — "최근 N건" 조회가 시간 기준 판정의 입력을 잘라냄
+
+- 판정·표시는 **시간 기준**이다: EMERGENCY = 최근 12h(`EMERGENCY_LOOKBACK_HOURS`) 내
+  `sos_triggered`, 홈 "오늘 활동 N회" / 첫 활동 시각 = 오늘 기준.
+- 조회는 **개수 기준**이었다: Worker `queryRecentEvents()` 최근 100건, 앱
+  `FirestoreEventRepository` 최근 500건(`MAX_EVENTS`).
+- 펌웨어 `MOTION_COOLDOWN_MS` 5초 → 활동이 계속되면 100건은 약 8분, 500건은 약 42분이면 찬다.
+  그 밖으로 밀려난 SOS 는 **에러 없이** 사라져 서버 EMERGENCY 가 해제됐고, 앱도
+  (`careStore.project()` 가 같은 500건으로 `deriveCareStatus` 를 직접 호출하므로)
+  Hero 가 EMERGENCY 를 놓쳤다. 활동이 많은 날 오늘 활동 수 / 첫 활동 시각이 잘렸다.
+
+### 변경 1
+
+| 위치 | 변경 |
+| --- | --- |
+| `server/cloudflare-worker/src/firestoreRead.js` | `queryLatestEventOfType()` 추가 — `careRecipientId == X AND eventType == 'sos_triggered'`, `occurredAt DESC`, `limit 1`. `queryRecentEvents()` 는 그대로(결과에 문서 `id` 만 추가). |
+| `server/cloudflare-worker/src/careStatusReader.js` | 최근 100건 ∪ 최신 sos 1건을 id 로 중복 제거해 병합 (`mergeEventsById`). `normalizeCareStatusInput` / `computeCareStatusSnapshot` **변경 없음** (입력 보완만). |
+| `src/services/eventWindow.ts` (신규, 순수) | 앱 조회 창 상수(`RECENT_EVENTS_LIMIT=100`, `TODAY_EVENTS_SAFETY_CAP=2000`), 로컬 자정 계산, 상한 판정, 병합. |
+| `src/services/firestore/firestoreEventRepository.ts` | 쿼리 3개: recent(100) / today(`occurredAt >= 로컬 자정`, `limit CAP+1`) / 최신 sos(1). `listEvents` 와 `subscribeToEvents` 모두 합집합. 구독은 세 리스너가 **모두 첫 스냅샷을 받은 뒤에만** 내보낸다. 60초마다 로컬 날짜 변경을 확인해 today 리스너를 다시 연다. |
+| `eventRepository.ts` / `eventService.ts` / `careStore.ts` | `EventsMeta { todayTruncated }` (리스너 선택 인자, `getEventsWithMeta()`), store `todayTruncated`. InMemory 경로는 항상 `false`. |
+| `src/utils/todayActivity.ts`, 홈 / Timeline | `truncated` 옵션 → `countText` "N회 이상", `firstAt` 없음, Timeline "오늘 첫 활동" 표시 끔. |
+| `firestore.indexes.json` | `events (careRecipientId ASC, eventType ASC, occurredAt DESC)` 추가. today 범위 쿼리는 기존 `(careRecipientId ASC, occurredAt DESC)` 를 쓴다. |
+
+- recent 를 500 → 100 으로 줄인 근거: 이 목록의 사용처는 `lastActivity`, `totalEventCount`(0건
+  여부), `buildHomeSummary` 의 presence(외출/귀가 — 계산만 되고 **화면에 렌더되지 않음**),
+  그리고 오늘 통계(이제 today 쿼리가 담당)뿐이다.
+- `firestore.rules` **변경 없음**. 새 쿼리는 모두 `careRecipientId ==` 등호 필터를 가져
+  `isGuardianOf(resource.data.careRecipientId)` 로 평가된다 (에뮬레이터 테스트로 확인).
+- `occurredAt` 은 Firestore Timestamp 로 저장된다 (Worker `timestampValue`, 앱 SDK `Date`).
+  앱 범위 필터는 `Timestamp.fromDate(로컬 자정)` 으로 비교한다.
+
+### 문제 2 / 변경 2 — type 없는 디바이스가 디바이스별 이벤트 제한을 건너뜀
+
+- `validateDevice()` 가 `if (device.type != null) { … }` 로 감싸져 있어, `devices/{id}.type` 이
+  없으면 디바이스별 제한 전체를 건너뛰고 전역 화이트리스트의 모든 eventType
+  (`sos_triggered` 포함)을 받아들였다. (목록에 없는 type 값은 이전에도 422 로 거부됐다.)
+- 변경 후 (`server/cloudflare-worker/src/validate.js`, 기존 `fail()` 규칙과 같은 422):
+
+| devices 문서 type | 응답 |
+| --- | --- |
+| 누락 / `null` / 빈 문자열 / 비문자열 | **422 `device_missing_type`** |
+| `ALLOWED_DEVICE_TYPES` 에 없는 값 | 422 `unsupported_device_type` (기존과 동일) |
+| 등록 type 이지만 `DEVICE_TYPE_EVENTS` 항목 없음 / 허용 안 된 eventType | 422 `event_type_not_allowed_for_device` |
+| `ESP32_PIR` + `motion_detected` | 201 (기존과 동일) |
+
+### 검증
+
+| 항목 | 결과 |
+| --- | --- |
+| `npm run test:smoke` | **17개 스크립트 / 328 checks / 실패 0** (기존 301 + endpoint 7 + 신규 `care-window-regression-smoke.mjs` 20) |
+| `npm run typecheck` | PASS |
+| `npm run lint` | PASS |
+| `npm run test:rules:emulator` | **30 checks PASS** (새 쿼리 형태: 연결된 guardian ALLOW, 미연결 / 무링크 / disabled DENY) |
+
+- `phase43-firestore-reader-smoke.mjs` 의 "READ 2회" 단언은 의도된 변경에 맞춰 "READ 3회
+  (최근 N건 + 최신 sos + device)" 로 고쳤고, mock 이 structuredQuery(eventType 필터 / 정렬 /
+  limit)를 반영하도록 바꿨다.
+
+### 미검증 항목
+
+- 실제 Firestore 에서의 새 쿼리 실행 (복합 인덱스는 에뮬레이터가 강제하지 않는다 —
+  인덱스 배포 후 운영에서 확인 필요).
+- Worker 배포 후 운영 Cron 실행 / 실기기 SOS → EMERGENCY 유지 (SOS 는 원래 자동 테스트만).
+- 앱 실기기에서의 리스너 3개 동작, 자정 전환(today 리스너 재구독), "N회 이상" 표시.
+- 운영 `devices/{DEVICE_ID}.type` 값 (Console 에서 확인 필요 — 아래).
+
+### 알려진 한계 / 운영 주의사항
+
+- **heartbeat 는 type 을 검사하지 않는다.** `validateHeartbeatDevice()` 는 존재 / enabled 만
+  본다. heartbeat 는 이벤트를 만들지 않으므로 eventType 우회는 없지만, type 이 없거나 잘못된
+  기기도 `lastHeartbeatAt` 을 갱신해 기기 축 ONLINE 으로 보일 수 있다. 이번 범위에서는 의도적으로
+  바꾸지 않았다 (운영 문서에 type 이 없으면 heartbeat 가 끊겨 OFFLINE 알림이 가기 때문).
+- **"오늘" 은 기기 로컬 자정 기준이다.** 기존 `isSameLocalDay` 와 같은 규칙이며, 한국 시간대
+  기기에서만 KST 00:00 과 같다. 서버에는 "오늘" 계산이 없다.
+- **최신 SOS 쿼리가 실패하면 Cron 전체가 실패한다.** (인덱스 미배포 / 빌드 중이면
+  `FAILED_PRECONDITION`.) SOS 를 빼고 판정하지 않기 위한 의도된 동작이며, 그 동안
+  `careStatus` 스냅샷과 전환 알림이 갱신되지 않는다. 앱도 같은 조건에서 init 이
+  "기록을 불러오지 못했어요" 를 보이고, 실시간 갱신은 세 리스너가 모두 첫 스냅샷을 받아야
+  시작된다.
+- 오늘 이벤트가 2000건을 넘으면 최신 2000건만 읽고 `todayTruncated=true` 로 표시한다
+  (오늘 활동 수는 하한값, 첫 활동 시각은 표시하지 않음). 앱을 열 때 today 쿼리는 최대 2001 reads.
+- 펌웨어 `MOTION_COOLDOWN_MS` 는 여전히 5초(개발용)다 — 이번 범위에서 바꾸지 않았다.
+- `occurredAt` 이 문자열로 저장된 레거시 events 문서가 있다면 today 범위 쿼리에서 빠지고,
+  desc 정렬에서는 Timestamp 문서보다 앞에 온다(Firestore 타입 순서). Worker / 앱 경로는
+  Timestamp 만 쓴다.
+
+### 운영 배포 체크리스트 (순서 중요)
+
+1. **인덱스 배포** — `firebase deploy --only firestore:indexes`. Firebase Console → Firestore →
+   인덱스에서 `events (careRecipientId, eventType, occurredAt DESC)` 가 **사용 설정됨** 이 될
+   때까지 기다린다. (빌드 전 Worker 를 배포하면 Cron 이 실패한다.)
+2. **Console 확인** — `devices/{DEVICE_ID}` (현재 `dev-device-livingroom`):
+   `type` = `"ESP32_PIR"` (string, 정확히 일치), `enabled` = `true` (boolean),
+   `careRecipientId` 존재. type 이 없으면 Worker 배포 직후 PIR 이벤트가 전부
+   422 `device_missing_type` 로 거부된다.
+3. **Worker 배포** — `wrangler deploy`. `wrangler tail` 에서 다음 Cron 의
+   `[care-status] scheduled compute ok` 와 ingest `ingest created event … (motion_detected …)` 확인.
+4. **앱 빌드 / 배포** — 홈 "오늘 활동", Timeline, 개발자 탭 상태 확인.
