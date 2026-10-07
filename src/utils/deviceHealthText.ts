@@ -52,7 +52,10 @@ export interface DeviceSummaryCard {
  */
 export function presentDeviceSummaryCard(
   health: DeviceHealth,
+  options: { stale?: boolean } = {},
 ): DeviceSummaryCard {
+  // 기기 구독이 오류 / 오프라인 지속이면 마지막으로 본 online 을 "연결됨" 으로 보여주지 않는다.
+  if (options.stale) return { value: '연결 확인 중', secondary: '최신 정보 없음' };
   if (health === 'online') return { value: '정상', secondary: '연결됨' };
   return { value: '연결 확인 중', secondary: '확인 필요' };
 }

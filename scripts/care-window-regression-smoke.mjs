@@ -42,6 +42,7 @@ import { deriveCareStatus } from '../src/services/careStatus.ts';
 import { buildTodayActivitySummary } from '../src/utils/todayActivity.ts';
 import { createEventWindowSubscription, rollTodayWindow } from '../src/services/eventWindow.ts';
 import { presentHome, presentStaleHome } from '../src/utils/careStatusText.ts';
+import { presentDeviceSummaryCard } from '../src/utils/deviceHealthText.ts';
 import fs from 'node:fs';
 import {
   applySnapshotSync,
@@ -769,6 +770,45 @@ check('O8. stale 문구는 오류/오프라인 공통 STALE_DATA_MESSAGE', () =>
   assert.equal(STALE_DATA_MESSAGE, '최신 정보를 불러오지 못했어요. 화면의 정보가 지금 상태와 다를 수 있어요.');
 });
 
+// ── 기기(devices/{id}) 구독 — 같은 실패/오프라인 규칙 ────────────────────
+
+check('D1. 기기 카드 — 구독 stale 이면 마지막 online 이어도 "정상 / 연결됨" 을 쓰지 않는다', () => {
+  assert.deepEqual(presentDeviceSummaryCard('online'), { value: '정상', secondary: '연결됨' }, '기존 동작');
+  for (const health of ['online', 'offline', 'unknown']) {
+    const c = presentDeviceSummaryCard(health, { stale: true });
+    assert.notEqual(c.value, '정상', health);
+    assert.notEqual(c.secondary, '연결됨', health);
+    assert.equal(c.secondary, '최신 정보 없음', health);
+  }
+});
+
+check('D2. 기기 구독 오프라인 지속 / 오류 → stale (이벤트 구독과 같은 판정 함수)', () => {
+  const live = applySnapshotSync(initialStreamSync(T0), { fromCache: false }, T0);
+  const off = applySnapshotSync(live, { fromCache: true }, at(MIN));
+  assert.equal(isStreamStale(off, at(3 * MIN)), true);
+  assert.equal(isStreamStale(applyStreamFailure(live), at(1000)), true);
+  assert.equal(isStreamStale(applySnapshotSync(off, { fromCache: false }, at(4 * MIN)), at(4 * MIN)), false);
+});
+
+check('static. deviceRepository — includeMetadataChanges 구독, fromCache 전달, 오류를 onError 로 알린다', () => {
+  const src = fs.readFileSync(new URL('../src/services/firestore/deviceRepository.ts', import.meta.url), 'utf8');
+  assert.match(src, /\{ includeMetadataChanges: true \}/);
+  assert.match(src, /fromCache: snap\.metadata\.fromCache/);
+  assert.match(src, /onError\?\.\(error\)/);
+});
+
+check('static. careStore — 기기 구독도 eventsSync 와 같은 규칙 (deviceSync, 하나라도 stale 이면 배너/Hero, 재구독)', () => {
+  const start = careStoreSrc.indexOf('function startDeviceRealtime');
+  assert.ok(start > 0, 'startDeviceRealtime 존재');
+  const body = careStoreSrc.slice(start, careStoreSrc.indexOf('\n}\n', start));
+  assert.match(body, /applySnapshotSync\([\s\S]*fromCache: info\.fromCache[\s\S]*applyStreamFailure\(/);
+  assert.match(careStoreSrc, /const deviceStale = input\.deviceSync \? isStreamStale\(input\.deviceSync, now\) : false/);
+  assert.match(careStoreSrc, /const stale = eventsStale \|\| deviceStale/);
+  assert.match(careStoreSrc, /if \(get\(\)\.deviceSync\?\.failed\) startDeviceRealtime\(set, get\)/);
+  const home = fs.readFileSync(new URL('../app/(tabs)/index.tsx', import.meta.url), 'utf8');
+  assert.match(home, /presentDeviceSummaryCard\(effectiveDeviceHealth, \{\s*stale: deviceStale,?\s*\}\)/);
+});
+
 // ── 정적 검사: careStore 연결 (RN 런타임 없이 확인 가능한 범위) ──────────
 const careStoreSrc = fs.readFileSync(new URL('../src/stores/careStore.ts', import.meta.url), 'utf8');
 
@@ -780,7 +820,7 @@ check('static. careStore — 구독 onNext 는 fromCache 로, onError 는 failed
     body,
     /subscribeToEvents\(\s*\(events, meta\) =>[\s\S]*?applySnapshotSync\([\s\S]*?fromCache: meta\?\.fromCache === true[\s\S]*?\},\s*\(\) => \{[\s\S]*applyStreamFailure\(/,
   );
-  assert.match(careStoreSrc, /const stale = input\.eventsSync \? isStreamStale\(input\.eventsSync, now\) : false/);
+  assert.match(careStoreSrc, /const eventsStale = input\.eventsSync \? isStreamStale\(input\.eventsSync, now\) : false/);
   assert.match(careStoreSrc, /syncNotice: stale \? STALE_DATA_MESSAGE : undefined/);
   assert.match(careStoreSrc, /statusText: stale\s*\?\s*presentStaleHome\(/);
 });

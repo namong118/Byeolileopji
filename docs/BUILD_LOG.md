@@ -1994,8 +1994,9 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
   P1–P3 stale 표시, careStore 연결 정적 검사 2).
 - **미검증**: 실기기에서 실제 리스너 오류(네트워크 끊김 / 권한 변경) → 배너 표시 → 복구,
   백그라운드 장시간 후 자정 넘어 복귀. careStore 의 RN 연결부는 정적 검사로만 확인했다.
-- **알려진 한계**: `devices/{id}` 구독(`deviceRepository.ts`)도 오류 시 로그만 남기고
-  마지막 기기 상태로 멈춘다 (이번 변경 이전부터 있던 동작, 이번 범위 밖).
+- ~~**알려진 한계**: `devices/{id}` 구독(`deviceRepository.ts`)도 오류 시 로그만 남기고
+  마지막 기기 상태로 멈춘다 (이번 변경 이전부터 있던 동작, 이번 범위 밖).~~
+  → **해소** — 아래 "후속 보완 3" 참고.
 
 ### 후속 보완 2 — 오프라인(캐시) 상태 감지
 
@@ -2025,3 +2026,22 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
   더해진다.
 - **알려진 한계**: 앱이 오프라인으로 시작하면 캐시 데이터가 최대 2분간 일반 상태로 보인다
   (온라인 시작 시 캐시 → 서버 전환 동안 배너가 깜박이지 않게 하기 위한 유예).
+
+### 후속 보완 3 — 기기(devices/{id}) 구독에 같은 실패 / 오프라인 규칙 적용
+
+- **문제**: 기기 구독은 오류 시 `__DEV__` 로그만 남기고, 네트워크 끊김은 error 로 오지도 않아
+  홈 "집 안 기기" 카드가 마지막으로 본 **"정상 / 연결됨"** 을 계속 보여줄 수 있었다.
+- **변경**
+  - `deviceRepository.subscribe(listener, onError)`: `{ includeMetadataChanges: true }` 로 구독,
+    listener 에 `{ fromCache }` 전달, 오류 시 `onError` 호출.
+  - `careStore.deviceSync: StreamSync` + `startDeviceRealtime()` — events 와 같은 `syncState.ts`
+    규칙 (2분 이상 캐시 = offline, 오류 = failed, 서버 스냅샷 = 자동 해제). failed 면 reload /
+    AppState active 에서 다시 구독.
+  - 표시: events / devices 중 **하나라도** stale 이면 같은 배너(`STALE_DATA_MESSAGE`)와 Hero
+    규칙(`presentStaleHome` — "별일 없어요" 금지, EMERGENCY 유지). Hero 의 "…까지 확인한 정보예요"
+    는 stale 인 구독들 중 가장 오래된 서버 확인 시각. 기기 카드는 stale 이면 기기 상태와 무관하게
+    **"연결 확인 중 / 최신 정보 없음"** (`presentDeviceSummaryCard(health, { stale })`).
+- **검증**: `care-window-regression-smoke.mjs` 42 → 46 checks (D1–D2 + 정적 검사 2).
+- **미검증**: 실기기에서 기기 구독 오류 / 비행기 모드 시 카드·배너 표시와 복귀 후 자동 해제.
+- **남은 한계**: 개발자 탭의 기기 진단 행(derived health 등)은 원시 판정값을 그대로 보여준다
+  (보호자 화면 아님, 의도적으로 유지).

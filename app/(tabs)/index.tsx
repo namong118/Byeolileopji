@@ -36,6 +36,7 @@ export default function HomeScreen() {
   const syncNotice = useCareStore((s) => s.syncNotice);
   const deviceHealth = useCareStore((s) => s.deviceHealth);
   const deviceHealthOverride = useCareStore((s) => s.deviceHealthOverride);
+  const deviceStale = useCareStore((s) => s.deviceStale);
 
   const summary = useMemo(
     () => buildHomeSummary(events, lastActivity),
@@ -54,7 +55,9 @@ export default function HomeScreen() {
 
   // ── "한눈에 보기" 2×2 그리드 — 항상 4칸, 값이 없으면 차분한 기본 문구를 쓴다
   //   (임의 데이터 생성 금지 — 빈 상태를 정직하게 표현할 뿐).
-  const deviceCard = presentDeviceSummaryCard(effectiveDeviceHealth);
+  const deviceCard = presentDeviceSummaryCard(effectiveDeviceHealth, {
+    stale: deviceStale,
+  });
   const recentActivityValue = lastActivity
     ? formatRelativeDetailed(lastActivity.occurredAt)
     : '아직 없음';

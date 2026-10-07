@@ -90,8 +90,11 @@ interface DerivedSlice {
    * 화면이 최신이 아닐 때의 사용자 문구 (STALE_DATA_MESSAGE). 없으면 최신.
    * 구독 오류(failed)와 오프라인 지속(offline, 유예 OFFLINE_STALE_AFTER_MS 초과)을 같은 문구로 보인다.
    * now 로 계산되므로 재계산 타이머마다 갱신되고, 서버 스냅샷이 다시 오면 자동으로 사라진다.
+   * events 구독과 devices 구독 중 **하나라도** stale 이면 표시한다.
    */
   syncNotice?: string;
+  /** devices/{id} 구독이 stale (오류 / 오프라인 지속) — 기기 카드에 "연결됨" 을 쓰지 않는다. */
+  deviceStale: boolean;
 }
 
 interface ProjectInput {
@@ -104,6 +107,8 @@ interface ProjectInput {
   deviceHealthOverride?: DeviceHealth;
   /** events 구독 동기화 상태. 없으면 최신으로 본다 (InMemory). */
   eventsSync?: StreamSync;
+  /** devices/{id} 구독 동기화 상태. 없으면 최신으로 본다 (InMemory / 기기 repo 없음). */
+  deviceSync?: StreamSync;
 }
 
 interface CareState extends DerivedSlice {
@@ -124,6 +129,8 @@ interface CareState extends DerivedSlice {
    * fromCache 지속 = 오프라인(SDK 자동 복구 대기). 둘 다 syncNotice / Hero stale 로 드러난다.
    */
   eventsSync?: StreamSync;
+  /** devices/{id} 구독 동기화 상태 — eventsSync 와 같은 규칙. */
+  deviceSync?: StreamSync;
 
   /** 원격 devices/{id} 문서 (Firestore 모드). 없으면 undefined. */
   deviceDoc?: DeviceDoc;
@@ -190,10 +197,13 @@ function project(input: ProjectInput): DerivedSlice {
     input.deviceHealthOverride ?? deviceHealth.health;
 
   // ── 최신성 (구독 오류 / 오프라인 지속) ───────────────────────────────
-  const stale = input.eventsSync ? isStreamStale(input.eventsSync, now) : false;
+  const eventsStale = input.eventsSync ? isStreamStale(input.eventsSync, now) : false;
+  const deviceStale = input.deviceSync ? isStreamStale(input.deviceSync, now) : false;
+  const stale = eventsStale || deviceStale;
 
   return {
     syncNotice: stale ? STALE_DATA_MESSAGE : undefined,
+    deviceStale,
     events: views.events,
     todayEvents: views.todayEvents,
     lastActivity: views.lastActivity,
@@ -205,7 +215,11 @@ function project(input: ProjectInput): DerivedSlice {
       ? presentStaleHome(
           presentHome(effectivePerson, effectiveDeviceHealth, now),
           effectivePerson,
-          input.eventsSync?.lastServerSyncAt,
+          // 둘 중 더 오래된 서버 확인 시각 (화면 전체가 그 시각 이후로는 확인되지 않았다)
+          oldestIso(
+            eventsStale ? input.eventsSync?.lastServerSyncAt : undefined,
+            deviceStale ? input.deviceSync?.lastServerSyncAt : undefined,
+          ),
         )
       : presentHome(effectivePerson, effectiveDeviceHealth, now),
     statusOverride: overrideActive ? input.statusOverride : undefined,
@@ -231,6 +245,7 @@ function projectInputFrom(
     | 'emergencyAckedAt'
     | 'deviceHealthOverride'
     | 'eventsSync'
+    | 'deviceSync'
   >,
   now: Date,
 ): ProjectInput {
@@ -242,7 +257,51 @@ function projectInputFrom(
     emergencyAckedAt: state.emergencyAckedAt,
     deviceHealthOverride: state.deviceHealthOverride,
     eventsSync: state.eventsSync,
+    deviceSync: state.deviceSync,
   };
+}
+
+function oldestIso(...values: (string | undefined)[]): string | undefined {
+  const ms = values.map((v) => (v ? Date.parse(v) : NaN)).filter((n) => !Number.isNaN(n));
+  return ms.length > 0 ? new Date(Math.min(...ms)).toISOString() : undefined;
+}
+
+/**
+ * devices/{id} 실시간 구독을 (다시) 연다 — events 구독과 같은 규칙.
+ *  - 스냅샷마다 fromCache 로 deviceSync 갱신 (오프라인 지속 → stale, 복귀 시 자동 해제).
+ *  - 구독 오류 → deviceSync.failed. reload / AppState active 가 다시 연다.
+ */
+function startDeviceRealtime(set: StoreSet, get: () => CareState): void {
+  deviceUnsub?.();
+  deviceUnsub = undefined;
+  const deviceRepo = getDeviceRepo();
+  if (!deviceRepo) return;
+
+  deviceUnsub = deviceRepo.subscribe(
+    (deviceDoc, info) => {
+      const now = new Date();
+      const deviceSync = applySnapshotSync(
+        get().deviceSync ?? initialStreamSync(now),
+        { fromCache: info.fromCache },
+        now,
+      );
+      set({
+        deviceDoc,
+        deviceSync,
+        ...project(projectInputFrom({ ...get(), deviceDoc, deviceSync }, now)),
+      });
+    },
+    () => {
+      deviceUnsub?.();
+      deviceUnsub = undefined;
+      const now = new Date();
+      const deviceSync = applyStreamFailure(get().deviceSync ?? initialStreamSync(now));
+      set({
+        deviceSync,
+        ...project(projectInputFrom({ ...get(), deviceSync }, now)),
+      });
+    },
+  );
 }
 
 type StoreSet = (partial: Partial<CareState>) => void;
@@ -344,15 +403,7 @@ export const useCareStore = create<CareState>((set, get) => ({
     if (!realtimeUnsub) startEventsRealtime(set, get);
 
     // devices/{id} 문서 구독 (Firestore 모드, 최초 1회)
-    const deviceRepo = getDeviceRepo();
-    if (!deviceUnsub && deviceRepo) {
-      deviceUnsub = deviceRepo.subscribe((deviceDoc) => {
-        set({
-          deviceDoc,
-          ...project(projectInputFrom({ ...get(), deviceDoc }, new Date())),
-        });
-      });
-    }
+    if (!deviceUnsub) startDeviceRealtime(set, get);
 
     // 저빈도 재계산 타이머 (이벤트/heartbeat 가 없어도 시간 경과 반영)
     if (!recomputeTimer) {
@@ -369,6 +420,7 @@ export const useCareStore = create<CareState>((set, get) => ({
         // 기다리지 않는다), 실시간 구독이 끊겨 있으면 다시 연다.
         getEventService().refreshDayWindow();
         if (get().eventsSync?.failed) startEventsRealtime(set, get);
+        if (get().deviceSync?.failed) startDeviceRealtime(set, get);
         get().refreshDerived();
       });
     }
@@ -390,6 +442,7 @@ export const useCareStore = create<CareState>((set, get) => ({
       });
       // 끊긴 실시간 구독은 새로 연다 (다시 실패하면 failed 가 다시 선다).
       if (wasFailed) startEventsRealtime(set, get);
+      if (get().deviceSync?.failed) startDeviceRealtime(set, get);
     } catch (error) {
       if (__DEV__) console.error('[별일없지] reload 실패', error);
       set({
@@ -465,6 +518,7 @@ export const useCareStore = create<CareState>((set, get) => ({
       emergencyAckedAt: undefined,
       todayTruncated: false,
       eventsSync: undefined,
+      deviceSync: undefined,
     });
   },
 }));
