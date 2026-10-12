@@ -2183,3 +2183,38 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
   `occurredAt` 타입(timestamp), `careRecipientId` 철자를 확인한다. `FAILED_PRECONDITION` 이면
   인덱스 상태를 다시 본다. 푸시만 안 오면 `pushTokens` 문서의 `enabled` 와 notifier 로그
   (`decided` / `sent` / `failed`)를 확인한다.
+
+## Docs — 작업 규칙 문서 CLAUDE.md 작성 (2026-10-12)
+
+**이유**: 여러 계정에서 번갈아 작업하게 되어, 어느 세션이든 같은 규칙을 따르도록 레포 루트
+`CLAUDE.md` 에 작업 규칙을 모았다. 이전에는 `@AGENTS.md` (Expo 버전 문서 안내) 한 줄뿐이었고,
+배포 순서·롤백 같은 규칙은 이 BUILD_LOG 의 기록 안에만 있었다.
+
+### 한 일
+
+- `CLAUDE.md` 에 규칙 8개 절 작성 (`@AGENTS.md` 는 맨 위에 유지):
+  1. 레포 구성 — 경로별 역할, 판정 코어 `careStatusSnapshot.ts` 를 앱·Worker 가 공유, 관련 레포
+  2. 배포·운영 — 운영 배포 명령은 사용자가 직접 실행 (`wrangler deploy --dry-run` 만 예외),
+     인덱스 "사용 설정됨" → Worker → 앱 순서, 새 eventType 은 앱 먼저
+  3. 판정 로직 — eventType 화이트리스트 세 곳 동시 수정, Vision 이벤트는 처음에 Timeline 표시만,
+     판정 동작 변경은 별도 승인, 시간 범위 판정은 "최근 N건" 조회로 구현하지 않음
+  4. Vision 확장 — 추가할 때 `edge/vision/` (Python) 에 분리, 공통 이벤트 형식, 원본 영상 미저장·미전송
+  5. 검증 — smoke / typecheck / lint (+ Rules 변경 시 에뮬레이터), 미실행은 PASS 로 처리하지 않음
+  6. git — push · 강제 push 금지, 합치기 전 `origin/main` 포함 여부 확인, 미추적 파일 스테이징 금지
+  7. 비밀 정보 — 실제 `.gitignore` 기준 비밀 파일 목록과 커밋 가능한 템플릿
+  8. 작업 방식 — 조사 → 계획 → 승인 후 구현, 세션 종료 시 BUILD_LOG 기록, 홈페이지 반영 필요 기록
+- 위 "운영 확인 체크리스트" 절 제목에서 날짜·상태를 빼고 (`(2026-10-07 기준 전부 미실시)` 삭제),
+  현재 상태를 본문 첫 줄로 옮겼다. CLAUDE.md 가 절 제목으로 이 위치를 가리키기 때문이다.
+
+### 검증
+
+- 문서만 변경. CLAUDE.md 에 적은 코드 경로·식별자는 레포에서 존재를 확인했다
+  (`edge/vision/` 은 아직 없음 — "추가할 때" 로 표현). smoke / typecheck / lint 는 **미실행**
+  (코드 변경 없음).
+
+### 진행 중 / 남은 일
+
+- 커밋 3개는 사용자 요청으로 일반 push (강제 push 없음).
+- "운영 확인 체크리스트" 상단 안내 문구를 본문 첫 줄 상태(1번 확인 완료 · 2–7번 미실시)에
+  맞게 고쳤다.
+- 운영 확인 체크리스트 2–7번은 그대로 미실시.
