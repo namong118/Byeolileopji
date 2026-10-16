@@ -2218,3 +2218,79 @@ Galaxy Watch · Wear OS 앱 · GPS · 푸시 알림 · 실제 복약 알림 · A
 - "운영 확인 체크리스트" 상단 안내 문구를 본문 첫 줄 상태(1번 확인 완료 · 2–7번 미실시)에
   맞게 고쳤다.
 - 운영 확인 체크리스트 2–7번은 그대로 미실시.
+
+## Vision — 사람 검출 파인튜닝 1차판 환경·스크립트 (2026-10-16)
+
+**이유**: `namong118/physical-ai` 의 `report/model-training-validation.md` (3.3·3.4·4장·6장) 계획대로
+YOLO26n (`person` 1클래스) 기준선 측정과 파인튜닝을 하기 위한 환경과 스크립트를 준비했다.
+학습 데이터는 공개 데이터셋, 검증·시험 데이터는 직접 녹화한 세션 1·2 로 나눈다.
+학습·추론은 로컬 PC(RTX 3060)에서만 한다.
+
+### 한 일
+
+- `edge/vision/training/` 추가 (Python, JS/TS 빌드와 분리). 사용법은 같은 폴더 `README.md` 에 있다.
+  - `check_env.py`: GPU·버전·폴더 확인과 GPU 추론 1회
+  - `extract_frames.py`: 영상을 초당 1장 프레임으로. 파일 이름은 `<세션>_<장면>_<클립>_t<0.1초>`
+  - `prelabel.py`: 사전학습 초안을 Label Studio predictions 로 만듦. 이미지는 로컬 파일 주소로 지정
+  - `ls_to_yolo.py`: Label Studio JSON 내보내기를 YOLO 라벨로. 사람이 제출한 annotations 만 쓰고 초안은 쓰지 않음
+  - `import_public.py`: 공개 데이터(YOLO txt)를 person 1클래스로. `--audit` 으로 라벨 누락 의심 이미지를 찾음
+  - `build_dataset.py`: 분할과 `data.yaml` 생성, 장면별 목록 작성. 세션 누수·중복 이미지·라벨 형식을 검사
+  - `eval_scenes.py`: 장면별 P·R·mAP50·mAP50-95 표(문서 4.2 형식)와 배경 장면 오검출 표.
+    시험 세트는 `--final` 을 붙여야 실행
+  - `train.py`: `fraction=0.1` 리허설과 본 학습(문서 3.4 설정). 라벨 0개 사전 점검, `lr0`·`optimizer` 함정 방지
+  - `start_label_studio.py`, `label_config.xml`: Label Studio 를 로컬 전용으로 실행
+    (사용 통계·Sentry·버전 확인 끔, 127.0.0.1 에서만 열림)
+  - `tests/test_training_logic.py`: 합성 데이터로 하는 로직 테스트 21개
+- 장면 코드: `standing`, `sitting`, `lying`, `occluded`, `evening`, `bg-empty`, `bg-tv`
+- 데이터·결과 위치는 `edge/vision/training/.env` 의 `BYEOL_DATA_DIR` / `BYEOL_RUNS_DIR` 로 레포 밖 폴더를 지정한다
+  (변수 이름만 `.env.example`). 설정이 없으면 `data/`·`runs/` (git 무시)를 쓴다.
+- ultralytics 는 `YOLO_CONFIG_DIR` 로 이 폴더 전용 설정을 쓴다. 사용 이벤트 전송(`sync`)을 끄고,
+  AMP 검사용 가중치가 레포 폴더에 내려받아지지 않게 했다. PC 전역 설정은 바꾸지 않았다.
+- Python 3.12 venv 두 개를 쓴다 (`.venv` 학습용, `.venv-labelstudio` 라벨 도구용, 둘 다 git 무시).
+  같은 venv 에 넣으면 의존성이 충돌한다. label-studio 1.23.2 는 `setuptools>=83` 과
+  `opencv-python-headless 4.12` 를 요구하고, torch 는 `setuptools<82`, ultralytics 는 `opencv-python` 을 요구한다.
+- `.gitignore`: 학습 폴더의 `data/`·`runs/`·venv 두 개, `__pycache__/`, `*.pt`·`*.onnx`·`*.engine`, 영상 확장자(대소문자 무관)
+- `CLAUDE.md`: 레포 구성 표에 `edge/vision/training/` 추가. 4절 제목을 "실시간 파이프라인 코드는 아직 없음, 학습 스크립트만 있음" 으로 수정
+
+### 검증
+
+- 설치: Python 3.12.10, torch 2.11.0+cu128, torchvision 0.26.0+cu128, ultralytics 8.4.175,
+  label-studio 1.23.2. 두 venv 모두 `pip check` 이상 없음.
+- `check_env.py`: CUDA 사용 True, RTX 3060 인식, 사용 이벤트 전송 안 함, GPU 추론 1회 성공 (예제 이미지)
+- 로직 테스트 21개 통과 (합성 데이터)
+- 합성 데이터로 전체 흐름을 끝까지 실행했다.
+  - 흐름: 합성 영상 → 프레임 → 초안 → (초안을 그대로 제출한 것으로 흉내) → 라벨 → 공개 데이터 흉내 변환·audit
+    → 데이터셋 → 리허설 학습(3 epoch) → 기준선·리허설 모델 장면별 평가
+  - 모든 단계가 오류 없이 끝났다. **성능 수치는 합성 데이터라 의미 없음.**
+- Label Studio 1.23.2 를 실제로 띄워 API 로 확인 (합성 데이터, 임시 계정):
+  - `tasks.json` 가져오기: 작업 42개와 predictions 42개가 들어감
+  - 로컬 파일 이미지 요청: 저장소 연결 전에는 404, Local files 저장소를 연결하면(Sync 안 함) 200. 작업 중복 없음
+  - 박스 있는 제출과 박스 0개 제출이 모두 생성됨(201). JSON 내보내기 → `ls_to_yolo.py` 변환 결과가 맞음
+  - JSON 내보내기에는 기본적으로 제출이 있는 작업만 들어간다. 그래서 전체 미검수 수는 `build_dataset.py` 가 보고한다
+- `npm run test:smoke` · `npm run typecheck` · `npm run lint` 통과 (JS/TS 코드는 바꾸지 않았음)
+
+### 미검증
+
+- 실제 폰 영상(H.264 / HEVC, 세로 회전 정보) 디코딩 — 합성 mp4 로만 확인
+- Label Studio 브라우저 화면 조작 — API 로만 확인했다. 대상: 프로젝트 설정 메뉴 이름, 초안을 편집 가능한 박스로 불러오는 방식, 박스 0개 제출
+- 사용 통계·Sentry·버전 확인이 꺼진 것 — 실제 네트워크 요청은 관찰하지 않았다. 설치된 소스에서 설정 이름과 분기만 확인했다
+- 실제 데이터 규모에서 `batch=-1`·`cache=True` 의 VRAM·RAM 사용량, 학습 시간
+- `freeze=10` 이 YOLO26n 백본 경계와 맞는지 (문서 값 그대로 사용)
+- 공개 데이터셋 형식·라이선스·라벨 범위 (후보 미정)
+
+### physical-ai 반영 필요
+
+`report/model-training-validation.md` 와 달라지는 점 (이번에 physical-ai 레포는 고치지 않았다):
+
+1. 학습 데이터 출처: 문서 3.3 은 집 녹화를 세션 단위로 학습/검증/시험에 나누지만, 이번 구성은 학습 = 공개 데이터, 검증 = 녹화 세션 1, 시험 = 녹화 세션 2.
+2. 배경 이미지 10%: 집 녹화는 검증·시험에만 쓰므로 학습용 배경 이미지는 공개 데이터에서 구하거나 이번 판에서는 넣지 않게 된다.
+3. 장면 구분: 4.2 표의 "서 있음·이동"·"앉음"은 그대로 나눴고 (`standing`·`sitting`), 배경은 "사람 없음"(`bg-empty`)과 "TV 켜짐"(`bg-tv`)으로 나눈다.
+4. TV 장면 P: 사람이 없는 장면은 정답 박스가 0개라 P·R·mAP 가 정의되지 않는다. 4.6 표의 "TV P" 대신 오검출 박스 수·오검출 이미지 수로 보고한다.
+5. 진행 순서: 6장대로 기준선 측정(3단계)이 파인튜닝보다 먼저다. `eval_scenes.py` 에 사전학습 `yolo26n.pt` 를 주면 기준선 측정이 된다.
+
+### 진행 중 / 남은 일
+
+- 커밋 3개 (`chore: ignore vision training data`, `feat: add vision person-detection training scripts`, `docs: record vision training setup in build log`). push 는 사용자가 한다.
+- 녹화 (세션 s1·s2) → 프레임 추출 → 초안 → Label Studio 검수 → 기준선 측정
+- 공개 데이터셋 후보 라이선스 확인 → `import_public.py --audit` 로 라벨 범위 확인
+- 홈페이지 반영 필요: 학습 데이터 출처·장면 구분·TV 장면 지표 변경 → `model-training-validation.md` 를 먼저 수정한 뒤 홈페이지 요약 반영 (위 5개)
