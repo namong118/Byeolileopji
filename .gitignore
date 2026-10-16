@@ -62,3 +62,17 @@ secrets.h
 # generated native folders
 /ios
 /android
+
+# Vision 학습 (edge/vision/training) — 영상·이미지·라벨·가중치는 커밋하지 않는다
+# 데이터·결과는 .env 의 BYEOL_DATA_DIR / BYEOL_RUNS_DIR 로 레포 밖에 두고, 설정이 없을 때의 기본 폴더도 무시한다
+edge/vision/training/data/
+edge/vision/training/runs/
+edge/vision/training/.venv/
+edge/vision/training/.venv-labelstudio/
+__pycache__/
+*.pt
+*.onnx
+*.engine
+*.[mM][pP]4
+*.[mM][oO][vV]
+*.[mM]4[vV]
