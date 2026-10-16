@@ -1,0 +1,3 @@
+# 라벨 도구 venv (.venv-labelstudio) — 학습 venv 와 섞지 않는다.
+# label-studio 는 setuptools>=83, opencv-python-headless 4.12 를 요구해 torch(setuptools<82)·ultralytics(opencv-python)와 충돌한다.
+label-studio==1.23.2

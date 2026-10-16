@@ -13,6 +13,7 @@
 | `server/cloudflare-worker/` | 디바이스 이벤트 수신(ingest) · Cron 상태 판정 · FCM 알림 Worker |
 | `firmware/esp32-pir/` | ESP32 PIR 센서 펌웨어 |
 | `scripts/` | 스모크 테스트 · Rules 에뮬레이터 테스트 |
+| `edge/vision/training/` | 사람 검출 모델 학습·평가 스크립트 (Python, 데이터·가중치는 레포 밖) |
 | `firestore.rules`, `firestore.indexes.json` | Firestore 보안 규칙 · 복합 인덱스 |
 | `docs/BUILD_LOG.md` | 작업 기록 · 배포 기록 · 운영 확인 체크리스트 |
 
@@ -58,7 +59,7 @@
   → `docs/BUILD_LOG.md` 의 "Fix — 조회 창(최근 N건) vs 시간 기준 판정 불일치 + 미등록
   deviceType 우회 차단" 절.
 
-## 4. Vision 확장 (아직 코드 없음)
+## 4. Vision 확장 (실시간 파이프라인 코드는 아직 없음, 학습 스크립트만 있음)
 
 - Vision 코드를 추가할 때는 `edge/vision/` (Python) 에 두고, 기존 JS/TS 빌드
   (`tsc`, `expo lint`, Worker 번들)와 분리한다.
