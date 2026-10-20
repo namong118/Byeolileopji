@@ -402,6 +402,7 @@ class TrainSettingsTest(unittest.TestCase):
         self.assertEqual(train.train_kwargs("full", None, None, None),
                          {"imgsz": 640, "epochs": 300, "patience": 15, "batch": -1, "cache": True, "freeze": 10})
         self.assertEqual(train.train_kwargs("full", None, None, "disk")["cache"], "disk")
+        self.assertEqual(train.train_kwargs("full", None, None, None, 23)["freeze"], 23)
 
     def test_lr0_requires_explicit_optimizer(self):
         with self.assertRaises(ValueError):

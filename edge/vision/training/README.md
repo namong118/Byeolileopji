@@ -291,6 +291,7 @@ CAUCAFall 은 Mendeley 의 "Download All" 압축(약 8.3 GB)을 `<data>/public-r
 
 - 시작 전에 학습·검증 이미지와 박스 수를 확인하고, 0개면 멈춥니다. data.yaml 경로가 틀려도 ultralytics 는 에러 없이 라벨 0개로 학습을 끝내기 때문입니다.
 - `--lr0` 를 줄 때는 `--optimizer` 도 지정해야 합니다. `auto` 는 lr0 를 덮어씁니다.
+- `--freeze N` 은 앞에서부터 N 개 층을 고정합니다 (yolo26n: 0–10 backbone, 11–22 neck, 23 Detect). 기본 10 은 0–9 만 고정합니다.
 - `cache=True` 는 이미지를 RAM 에 올립니다. 공개 데이터가 커서 RAM 이 부족하면 `--cache disk` 를 씁니다.
 
 ## 8. 문제 해결

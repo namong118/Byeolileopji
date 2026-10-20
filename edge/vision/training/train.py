@@ -26,7 +26,8 @@ REHEARSAL = {"fraction": 0.1, "epochs": 3, "imgsz": 640}
 FULL = {"imgsz": 640, "epochs": 300, "patience": 15, "batch": -1, "cache": True, "freeze": 10}
 
 
-def train_kwargs(mode: str, lr0: float | None, optimizer: str | None, cache: str | None) -> dict:
+def train_kwargs(mode: str, lr0: float | None, optimizer: str | None, cache: str | None,
+                 freeze: int | None = None) -> dict:
     kwargs = dict(REHEARSAL if mode == "rehearsal" else FULL)
     if lr0 is not None:
         # optimizer=auto 는 lr0 를 덮어쓴다 (문서 3.4). lr0 를 바꿀 때는 optimizer 를 반드시 명시한다.
@@ -37,6 +38,8 @@ def train_kwargs(mode: str, lr0: float | None, optimizer: str | None, cache: str
         kwargs["optimizer"] = optimizer
     if cache is not None and mode == "full":
         kwargs["cache"] = {"true": True, "false": False}.get(cache.lower(), cache)  # ram 부족하면 disk
+    if freeze is not None:
+        kwargs["freeze"] = freeze  # 앞에서부터 freeze 개 층 고정 (yolo26n: 0–10 backbone, 11–22 neck, 23 Detect)
     return kwargs
 
 
@@ -72,11 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--lr0", type=float, help="초기 학습률 (줄 때는 --optimizer 필수)")
     ap.add_argument("--optimizer", help="SGD, AdamW 등 (기본 auto)")
     ap.add_argument("--cache", help="full 모드 캐시: true(기본, RAM) / disk / false")
+    ap.add_argument("--freeze", type=int, help="고정할 앞쪽 층 수 (기본: full 10)")
     ap.add_argument("--device", default="0")
     args = ap.parse_args(argv)
 
     try:
-        kwargs = train_kwargs(args.mode, args.lr0, args.optimizer, args.cache)
+        kwargs = train_kwargs(args.mode, args.lr0, args.optimizer, args.cache, args.freeze)
     except ValueError as e:
         print(e, file=sys.stderr)
         return 1
