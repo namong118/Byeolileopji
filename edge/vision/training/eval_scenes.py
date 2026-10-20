@@ -10,6 +10,9 @@
 - 배경 장면(사람 없음·TV 켜짐)은 정답 박스가 0개라 P·R·mAP 가 정의되지 않는다. 대신
   --bg-conf(기본 0.25) 이상인 오검출 박스 수와 오검출이 난 이미지 수를 따로 표로 낸다.
 - all 행은 배경 장면과 전환 동작(transition)을 포함한 세트 전체다. 전환 동작 행은 장면 비교가 아닌 참고용이다.
+- 실제 사용 기준 표: --op-conf(기본 0.25) 이상 박스만 남겨 장면별 "찾은 사람 / 정답 사람" 과 오검출 박스 수를 센다.
+  예측 박스를 conf 높은 순으로 아직 짝이 없는 정답 박스 중 IoU 가 가장 큰 것과 짝짓고, IoU 가 --op-iou(기본 0.5)
+  이상이면 찾은 사람, 아니면 오검출이다.
 """
 
 from __future__ import annotations
@@ -41,6 +44,42 @@ def run_val(model, yaml_path: Path, args, out_dir: Path, name: str, plots: bool)
     return {"P": float(m.box.mp), "R": float(m.box.mr), "mAP50": float(m.box.map50), "mAP50-95": float(m.box.map)}
 
 
+def iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    if w <= 0 or h <= 0:
+        return 0.0
+    inter = w * h
+    return inter / ((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+
+
+def match_boxes(gt: list[tuple], preds: list[tuple[tuple, float]], iou_thr: float) -> tuple[int, int]:
+    """(찾은 정답 수, 오검출 수). gt 는 xyxy, preds 는 (xyxy, conf). conf 높은 예측부터 정답 하나씩 짝짓는다."""
+    free = list(range(len(gt)))
+    found = 0
+    for box, _ in sorted(preds, key=lambda p: -p[1]):
+        best = max(free, key=lambda i: iou(gt[i], box), default=None)
+        if best is not None and iou(gt[best], box) >= iou_thr:
+            free.remove(best)
+            found += 1
+    return found, len(preds) - found
+
+
+def gt_xyxy(image: Path) -> list[tuple[float, float, float, float]]:
+    return [(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2) for _, cx, cy, w, h in read_yolo_label(label_path_for(image))]
+
+
+def operating_counts(model, images: list[Path], args) -> dict[str, tuple[int, int, int]]:
+    """이미지 파일 이름별 (정답 사람 수, 찾은 사람 수, 오검출 수) — conf ≥ --op-conf."""
+    out = {}
+    for path, r in zip(images, model.predict([str(p) for p in images], classes=[0], conf=args.op_conf, imgsz=args.imgsz,
+                                             device=args.device, stream=True, verbose=False)):
+        gt = gt_xyxy(path)
+        preds = [(tuple(b), float(c)) for b, c in zip(r.boxes.xyxyn.tolist(), r.boxes.conf.tolist())]
+        out[path.name] = (len(gt), *match_boxes(gt, preds, args.op_iou))
+    return out
+
+
 def scene_yaml(out_dir: Path, base: dict, list_file: Path, scene: str) -> Path:
     path = out_dir / "yaml" / f"{scene}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +99,13 @@ def background_fp(model, images: list[Path], args) -> dict:
             "fp_image_rate": hit_images / len(images) if images else None}
 
 
+def op_sum(counts) -> dict:
+    gt = found = fp = 0
+    for g, f, x in counts:
+        gt, found, fp = gt + g, found + f, fp + x
+    return {"gt": gt, "found": found, "fp": fp}
+
+
 def default_name(model_arg: str, split: str) -> str:
     p = Path(model_arg)
     stem = p.parent.parent.name if p.stem in ("best", "last") and p.parent.name == "weights" else p.stem
@@ -74,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--final", action="store_true", help="시험 세트 최종 평가임을 확인 (--split test 에 필요)")
     ap.add_argument("--conf", type=float, default=0.001, help="P·R·mAP 계산용 conf (기본 0.001)")
     ap.add_argument("--bg-conf", type=float, default=0.25, help="배경 장면 오검출 기준 conf (기본 0.25)")
+    ap.add_argument("--op-conf", type=float, default=0.25, help="실제 사용 기준 표의 conf (기본 0.25)")
+    ap.add_argument("--op-iou", type=float, default=0.5, help="실제 사용 기준 표에서 찾은 것으로 볼 IoU (기본 0.5)")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--device", default="0")
@@ -106,10 +154,14 @@ def main(argv: list[str] | None = None) -> int:
     all_yaml = scene_yaml(out_dir, base, root / "images" / args.split, "all")
     rows.append({"key": "all", "scene": "all", "Images": len(split_images), "Instances": count_instances(split_images),
                  **run_val(model, all_yaml, args, out_dir, "all", plots=True)})
+    op = operating_counts(model, split_images, args)
+    op_rows = [{"scene": "all", "Images": len(split_images), **op_sum(op.values())}]
     bg_rows = []
     for key, label in SCENES.items():
         list_file = scenes_dir / f"{args.split}_{key}.txt"
         images = [Path(l) for l in list_file.read_text(encoding="utf-8").splitlines() if l.strip()] if list_file.exists() else []
+        if images:
+            op_rows.append({"scene": label, "Images": len(images), **op_sum(op[p.name] for p in images)})
         row = {"key": key, "scene": label, "Images": len(images), "Instances": count_instances(images) if images else 0,
                "P": None, "R": None, "mAP50": None, "mAP50-95": None}
         if key in BACKGROUND_SCENES:
@@ -130,6 +182,10 @@ def main(argv: list[str] | None = None) -> int:
         name = f"**{r['scene']}**" if r["key"] in ("lying", "occluded", "evening", "bg-tv") else r["scene"]
         lines.append(f"| {name} | " + " | ".join(fmt(r[c]) for c in cols) + " |")
     lines += ["", "P·R 은 F1 이 가장 높은 conf 에서의 값. 배경 장면과 이미지가 없는 장면은 \"—\"."]
+    lines += ["", f"실제 사용 기준 (conf ≥ {args.op_conf}, IoU ≥ {args.op_iou})", "",
+              "| 장면 | Images | 찾은 사람 / 정답 사람 | 오검출 박스 |", "|---|---|---|---|"]
+    for o in op_rows:
+        lines.append(f"| {o['scene']} | {o['Images']} | {o['found']} / {o['gt']} | {o['fp']} |")
     if bg_rows:
         lines += ["", f"배경 장면 오검출 (conf ≥ {args.bg_conf})", "",
                   "| 장면 | Images | 오검출 박스 | 오검출 이미지 | 오검출 이미지 비율 |", "|---|---|---|---|---|"]
@@ -146,6 +202,10 @@ def main(argv: list[str] | None = None) -> int:
             extra = bg.get(r["key"], {})
             writer.writerow({**{k: r[k] for k in ["key", "scene", *cols]},
                              **{k: extra.get(k) for k in ["fp_boxes", "fp_images", "fp_image_rate"]}})
+    with (out_dir / "operating.csv").open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["scene", "Images", "found", "gt", "fp"])
+        writer.writeheader()
+        writer.writerows(op_rows)
     print(f"→ {out_dir}")
     return 0
 

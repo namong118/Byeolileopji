@@ -18,6 +18,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import build_dataset  # noqa: E402
+import eval_scenes  # noqa: E402
 import extract_frames  # noqa: E402
 import import_public  # noqa: E402
 import ls_to_yolo  # noqa: E402
@@ -341,6 +342,23 @@ class BuildDatasetTest(TempDataDir):
         self.make_session("s2", 10)
         (self.root / "labels" / "s2" / "lying" / "s2_lying_c01_t00000.txt").write_text("1 0.5 0.5 0.2 0.2\n", encoding="utf-8")
         self.assertEqual(build_dataset.main([]), 1)
+
+
+class OperatingMatchTest(unittest.TestCase):
+    def test_counts_found_and_false_positives(self):
+        gt = [(0.1, 0.1, 0.3, 0.5), (0.6, 0.2, 0.8, 0.6)]
+        preds = [((0.1, 0.1, 0.3, 0.5), 0.9), ((0.4, 0.8, 0.5, 0.9), 0.5)]
+        self.assertEqual(eval_scenes.match_boxes(gt, preds, 0.5), (1, 1))
+
+    def test_one_ground_truth_matches_once(self):
+        gt = [(0.1, 0.1, 0.3, 0.5)]
+        preds = [((0.1, 0.1, 0.3, 0.5), 0.6), ((0.11, 0.1, 0.31, 0.5), 0.9)]
+        self.assertEqual(eval_scenes.match_boxes(gt, preds, 0.5), (1, 1))
+
+    def test_low_iou_is_false_positive(self):
+        self.assertEqual(eval_scenes.match_boxes([(0.0, 0.0, 0.2, 0.2)], [((0.15, 0.15, 0.35, 0.35), 0.9)], 0.5), (0, 1))
+        self.assertEqual(eval_scenes.match_boxes([(0.0, 0.0, 0.2, 0.2)], [], 0.5), (0, 0))
+        self.assertEqual(eval_scenes.match_boxes([], [((0.0, 0.0, 0.2, 0.2), 0.9)], 0.5), (0, 1))
 
 
 class TrainSettingsTest(unittest.TestCase):
