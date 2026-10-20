@@ -2414,3 +2414,38 @@ occluded 8장은 거의 같은 이미지다.
 - 홈페이지 반영 필요: 침대 전체가 보이는 설치 위치, 시험 세트 sitting 없음 ("physical-ai 반영 필요" 9–10번)
   → `model-training-validation.md` 를 먼저 수정한 뒤 홈페이지 요약 반영
 - 커밋은 로컬에만 있다. push 는 사용자가 한다.
+
+## Vision — s1·s2 사전 라벨(초안) + Label Studio 프로젝트 준비 (2026-10-20)
+
+**이유**: 기준선 측정 전에 검증·시험 프레임(147장)을 사람이 검수할 수 있게 초안을 만들고 Label Studio 를 준비했다.
+코드는 바꾸지 않았다. 결과물은 모두 데이터 폴더(레포 밖)에 있다.
+
+### 한 일
+
+- `prelabel.py` 실행 (사전학습 `yolo26n.pt`, conf 0.25): 147장, 초안 박스 85개, 박스 없는 프레임 63장.
+- 장면별 초안 유무 (측정). 박스가 있다고 정답인 것은 아니다. 검수 전 수치이며 기준선 성능이 아니다.
+
+| 세션 | 장면 | 프레임 | 초안 있음 | 초안 없음 |
+| --- | --- | --- | --- | --- |
+| s1 | standing | 26 | 26 | 0 |
+| s1 | sitting | 3 | 3 | 0 |
+| s1 | lying | 2 | 0 | 2 |
+| s1 | occluded | 8 | 0 | 8 |
+| s1 | transition | 11 | 11 (1장은 박스 2개) | 0 |
+| s2 | standing | 27 | 27 | 0 |
+| s2 | lying | 28 | 2 | 26 |
+| s2 | occluded | 24 | 5 | 19 |
+| s2 | transition | 18 | 10 | 8 |
+
+- Label Studio 1.23.2 를 `start_label_studio.py` 로 실행하고, 로컬 전용 계정을 만들었다
+  (`--username`·`--password`. 이 PC 의 DB 에만 저장).
+- API 로 프로젝트 1개를 만들었다 (`label_config.xml`). Local files 저장소는 `<data>/frames`,
+  "Treat every bucket object as a source file" 를 켰고 Sync 는 하지 않았다.
+  `tasks.json` 을 가져왔다: 작업 147개, predictions 147개, annotations 0개. 이미지 요청 200 확인.
+- 확인한 점: Label Studio 1.23.2 의 새 조직은 legacy 토큰(`Authorization: Token …`) 인증이 꺼져 있다 (401).
+  API 는 로그인 세션(CSRF)으로 호출했다.
+
+### 진행 중 / 남은 일
+
+- Label Studio 검수 147장 (사용자). 특히 lying·occluded 의 초안 없는 프레임 55장 (s1 10장, s2 45장)에는 박스를 직접 그려야 한다.
+- 검수 후: JSON 내보내기 → `ls_to_yolo.py` → `build_dataset.py` → `eval_scenes.py` (기준선)
