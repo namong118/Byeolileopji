@@ -122,6 +122,68 @@ class ExtractFramesTest(TempDataDir):
             extract_frames.main([])
 
 
+class ContinuousVideoTest(TempDataDir):
+    def write_segments(self, text: str, name: str = "v") -> None:
+        (self.root / "raw" / "s1" / f"{name}.segments.csv").write_text(text, encoding="utf-8")
+
+    def frames(self) -> dict[str, list[str]]:
+        base = self.root / "frames" / "s1"
+        return {d.name: sorted(p.name for p in d.glob("*.jpg")) for d in sorted(base.iterdir()) if any(d.glob("*.jpg"))}
+
+    def test_splits_by_segments_and_keeps_source_time(self):
+        write_video(self.root / "raw" / "s1" / "v.mp4", 6.0)
+        self.write_segments("# 테스트\nstart,end,scene\n0,2,standing\n2,3,transition # 일어나는 중\n4,6,occluded\n")
+        self.assertEqual(extract_frames.main([]), 0)
+        self.assertEqual(self.frames(), {
+            "occluded": ["s1_occluded_c01_t00040.jpg", "s1_occluded_c01_t00050.jpg"],
+            "standing": ["s1_standing_c01_t00000.jpg", "s1_standing_c01_t00010.jpg"],
+            "transition": ["s1_transition_c01_t00020.jpg"],
+        })  # 3초는 구간 밖이라 제외
+        rows = extract_frames.load_manifest(self.root / "frames" / "manifest.csv")
+        self.assertEqual({r["source"] for r in rows}, {"v.mp4"})
+        self.assertEqual([r["sec"] for r in rows if r["scene"] == "occluded"], ["4.0", "5.0"])
+        self.assertEqual(parse_frame_name("s1_transition_c01_t00020").scene, "transition")
+
+    def test_exclude_keyword_and_mixed_with_scene_folders(self):
+        write_video(self.root / "raw" / "s1" / "v.mp4", 3.0)
+        self.write_segments("start,end,scene\n0,1,exclude\n1,3,lying\n")
+        write_video(self.root / "raw" / "s1" / "lying" / "w.mp4", 1.0)
+        self.assertEqual(extract_frames.main([]), 0)
+        self.assertEqual(self.frames(), {"lying": ["s1_lying_c01_t00010.jpg", "s1_lying_c01_t00020.jpg",
+                                                   "s1_lying_c02_t00000.jpg"]})
+
+    def test_rejects_bad_segment_files(self):
+        write_video(self.root / "raw" / "s1" / "v.mp4", 2.0)
+        for bad in ("0,2,standing\n",                                   # 머리글 없음
+                    "start,end,scene\n0,2,standsit\n",                   # 모르는 장면
+                    "start,end,scene\n0,2,standing\n1,3,lying\n",        # 겹침
+                    "start,end,scene\n2,2,standing\n",                   # 시작 = 끝
+                    "start,end,scene\n0,x,standing\n"):                  # 숫자 아님
+            self.write_segments(bad)
+            with self.assertRaises(SystemExit, msg=bad):
+                extract_frames.main([])
+        (self.root / "raw" / "s1" / "v.segments.csv").unlink()
+        with self.assertRaises(SystemExit):  # 구간 파일 없음
+            extract_frames.main([])
+
+    def test_changed_segments_require_overwrite_and_remove_stale_frames(self):
+        write_video(self.root / "raw" / "s1" / "v.mp4", 3.0)
+        self.write_segments("start,end,scene\n0,3,sitting\n")
+        self.assertEqual(extract_frames.main([]), 0)
+        self.assertEqual(extract_frames.main([]), 0)  # 바뀐 것 없음 → 건너뜀
+
+        self.write_segments("start,end,scene\n0,1,sitting\n1,3,transition\n")
+        self.assertEqual(extract_frames.main([]), 1)
+        self.assertEqual(extract_frames.main(["--overwrite"]), 0)
+        self.assertEqual(self.frames(), {
+            "sitting": ["s1_sitting_c01_t00000.jpg"],
+            "transition": ["s1_transition_c01_t00010.jpg", "s1_transition_c01_t00020.jpg"],
+        })
+        rows = extract_frames.load_manifest(self.root / "frames" / "manifest.csv")
+        self.assertEqual(sorted((r["scene"], r["sec"]) for r in rows),
+                         [("sitting", "0.0"), ("transition", "1.0"), ("transition", "2.0")])
+
+
 class PrelabelTaskTest(unittest.TestCase):
     def test_task_uses_predictions_and_local_url(self):
         root = Path(tempfile.gettempdir()) / "byeol-root"

@@ -17,10 +17,13 @@ SCENES: dict[str, str] = {
     "standing": "서 있음 · 이동",
     "sitting": "앉음",
     "lying": "누움",
-    "occluded": "가려짐 (조리대 · 식탁)",
+    "occluded": "가려짐 (몸 절반 이상이 가구·이불에)",
     "evening": "저녁 조명 · 역광",
     "bg-empty": "배경 (사람 없음)",
     "bg-tv": "배경 (TV 켜짐)",
+    # 일어나는 중·화면 끝에 걸림처럼 장면을 정하기 애매한 프레임. 장면 비교에는 쓰지 않는 참고 행이고,
+    # all 행(세트 전체)에는 들어간다.
+    "transition": "전환 동작 · 화면 끝 (참고)",
 }
 # 사람이 없는 장면. 정답 박스가 0개라 P·R·mAP 대신 오검출 수로 본다.
 BACKGROUND_SCENES = {"bg-empty", "bg-tv"}
