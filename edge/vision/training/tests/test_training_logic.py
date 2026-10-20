@@ -23,6 +23,7 @@ import extract_frames  # noqa: E402
 import import_public  # noqa: E402
 import ls_to_yolo  # noqa: E402
 import prelabel  # noqa: E402
+import prepare_caucafall  # noqa: E402
 import train  # noqa: E402
 from common import FrameName, LabelError, label_path_for, parse_frame_name, read_yolo_label  # noqa: E402
 
@@ -359,6 +360,40 @@ class OperatingMatchTest(unittest.TestCase):
         self.assertEqual(eval_scenes.match_boxes([(0.0, 0.0, 0.2, 0.2)], [((0.15, 0.15, 0.35, 0.35), 0.9)], 0.5), (0, 1))
         self.assertEqual(eval_scenes.match_boxes([(0.0, 0.0, 0.2, 0.2)], [], 0.5), (0, 0))
         self.assertEqual(eval_scenes.match_boxes([], [((0.0, 0.0, 0.2, 0.2), 0.9)], 0.5), (0, 1))
+
+
+class PrepareCaucafallTest(TempDataDir):
+    def test_parse_label_needs_exactly_one_box(self):
+        cls, box = prepare_caucafall.parse_label("1 0.5 0.5 0.2 0.4\n")
+        self.assertEqual(cls, 1)
+        for got, want in zip(box, (0.4, 0.3, 0.6, 0.7)):
+            self.assertAlmostEqual(got, want)
+        self.assertIsNone(prepare_caucafall.parse_label(""))
+        self.assertIsNone(prepare_caucafall.parse_label("0 0.5 0.5 0.2 0.4\n1 0.1 0.1 0.1 0.1\n"))
+
+    def test_near_duplicates_dropped_per_class(self):
+        still = (0.1, 0.1, 0.3, 0.5)
+        frames = [(0, still), (0, still), (0, (0.5, 0.1, 0.7, 0.5)), (1, still), (1, still)]
+        self.assertEqual(prepare_caucafall.drop_near_duplicates(frames, 0.9), [0, 2, 3])
+
+    def test_evenly_keeps_ends(self):
+        self.assertEqual(prepare_caucafall.evenly(list(range(10)), 3), [0, 4, 9])
+        self.assertEqual(prepare_caucafall.evenly([1, 2], 5), [1, 2])
+
+    def test_main_caps_per_video(self):
+        video = self.root / "src" / "Subject.1" / "Fall left"
+        for i in range(30):
+            write_image(video / f"f{i:03d}.png", i)
+            cls = 1 if i >= 15 else 0
+            (video / f"f{i:03d}.txt").write_text(f"{cls} {0.2 + i * 0.02:.3f} 0.5 0.1 0.3\n", encoding="utf-8")
+        write_image(video / "nolabel.png", 99)
+        out = self.root / "yolo"
+        self.assertEqual(prepare_caucafall.main(["--src", str(self.root / "src"), "--out", str(out),
+                                                 "--max-fall", "4", "--max-nofall", "3"]), 0)
+        report = json.loads((out / "thin_report.json").read_text(encoding="utf-8"))
+        self.assertEqual((report["kept_fall"], report["kept_nofall"], report["unlabeled_frames"]), (4, 3, 1))
+        self.assertEqual(len(list((out / "images").rglob("*.png"))), 7)
+        self.assertEqual(len(list((out / "labels").rglob("*.txt"))), 7)
 
 
 class TrainSettingsTest(unittest.TestCase):

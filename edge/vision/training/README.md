@@ -16,6 +16,7 @@
 | `start_label_studio.py` | Label Studio 를 로컬 전용 설정으로 실행 |
 | `label_config.xml` | Label Studio 라벨 설정 (`person` 박스 1종) |
 | `ls_to_yolo.py` | Label Studio 내보내기 → 검수 완료 YOLO 라벨 |
+| `prepare_caucafall.py` | CAUCAFall 원본 → 연속 프레임을 솎아 낸 YOLO 폴더 (`import_public.py` 입력) |
 | `import_public.py` | 공개 데이터셋(YOLO txt) → `person` 1클래스 |
 | `build_dataset.py` | 학습/검증/시험 분할, `data.yaml`, 세션 누수 검사 |
 | `eval_scenes.py` | 장면별 P · R · mAP50 · mAP50-95 표 (문서 4.2 형식) |
@@ -236,6 +237,24 @@ Export → **JSON** (JSON-MIN 아님) → 받은 파일을:
   그대로 학습하면 "서 있는 사람 = 배경" 을 배웁니다. `audit.csv` 에 사전학습 모델이 찾았는데 라벨이 없는
   사람이 있는 이미지를 남기니, 비율을 보고 그 데이터셋을 쓸지 정합니다.
 - 출력 파일 이름은 `p_<이름>_…` 로 시작해 녹화 세션 이름과 섞이지 않습니다.
+- 공개 데이터는 레포에 넣지 않습니다. `<data>/public-raw/` (원본) 와 `<data>/public/` (변환본) 에만 둡니다.
+
+### 사용 중인 공개 데이터
+
+| 이름 | 출처 | 라이선스 | 우리가 바꾼 점 |
+|---|---|---|---|
+| CAUCAFall (v5) | Eraso, J. C., Muñoz, E., Muñoz, M., Pinto, J. (2025). *Dataset CAUCAFall* (Version 5). Mendeley Data. https://doi.org/10.17632/7w7fccy7ky.5 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | 연속 프레임을 솎아 1,292장만 사용, 클래스 `nofall`·`fall` 을 `person` 하나로 합침 |
+
+CAUCAFall 은 Mendeley 의 "Download All" 압축(약 8.3 GB)을 `<data>/public-raw/caucafall/` 에 받아 풀고:
+
+```powershell
+.venv\Scripts\python prepare_caucafall.py --src "<data>\public-raw\caucafall\extracted\Dataset CAUCAFall\CAUCAFall"
+.venv\Scripts\python import_public.py --src "<data>\public-raw\caucafall\yolo" --name caucafall --person-classes 0,1 --audit
+```
+
+솎는 기준 (영상 = `Subject.N/<활동>` 폴더 하나, 기본값):
+1. 같은 클래스의 마지막으로 남긴 박스와 IoU 0.9 이상이면 버림 (사람이 거의 움직이지 않은 프레임)
+2. 남은 프레임에서 영상별 `fall` 최대 12장, `nofall` 최대 7장을 시간 순서로 고르게 뽑음
 
 ## 7. 데이터셋 · 평가 · 학습
 
