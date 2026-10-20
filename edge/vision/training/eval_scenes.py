@@ -25,8 +25,8 @@ from pathlib import Path
 
 import yaml
 
-from common import (BACKGROUND_SCENES, SCENES, data_dir, label_path_for, read_yolo_label, runs_dir, setup_ultralytics,
-                    weights_path)
+from common import (BACKGROUND_SCENES, SCENES, data_dir, label_path_for, list_images, read_yolo_label, runs_dir,
+                    setup_ultralytics, weights_path)
 
 
 def count_instances(images: list[Path]) -> int:
@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     base = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))
     root = Path(base["path"])
     scenes_dir = root / "scenes"
-    split_images = sorted((root / "images" / args.split).glob("*"))
+    split_images = list_images(root / "images" / args.split)  # cache=disk 의 .npy 는 빼고
     if not split_images:
         print(f"{args.split} 세트에 이미지가 없습니다.", file=sys.stderr)
         return 1
