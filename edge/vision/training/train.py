@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--optimizer", help="SGD, AdamW 등 (기본 auto)")
     ap.add_argument("--cache", help="full 모드 캐시: true(기본, RAM) / disk / false")
     ap.add_argument("--freeze", type=int, help="고정할 앞쪽 층 수 (기본: full 10)")
+    ap.add_argument("--workers", type=int, help="데이터 로더 프로세스 수 (기본 ultralytics 8). 메모리 부족(오류 1455)이면 줄인다")
     ap.add_argument("--device", default="0")
     args = ap.parse_args(argv)
 
@@ -95,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
 
     model = YOLO(str(weights_path(args.model)))
     print(f"학습 설정 ({args.mode}): {kwargs}")
+    if args.workers is not None:
+        kwargs["workers"] = args.workers
     model.train(data=str(data_yaml), device=args.device, project=str(runs_dir() / "train"),
                 name=args.name or args.mode, **kwargs)
     save_dir = Path(model.trainer.save_dir)

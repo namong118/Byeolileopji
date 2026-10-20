@@ -293,6 +293,7 @@ CAUCAFall 은 Mendeley 의 "Download All" 압축(약 8.3 GB)을 `<data>/public-r
 - `--lr0` 를 줄 때는 `--optimizer` 도 지정해야 합니다. `auto` 는 lr0 를 덮어씁니다.
 - `--freeze N` 은 앞에서부터 N 개 층을 고정합니다 (yolo26n: 0–10 backbone, 11–22 neck, 23 Detect). 기본 10 은 0–9 만 고정합니다.
 - `cache=True` 는 이미지를 RAM 에 올립니다. 공개 데이터가 커서 RAM 이 부족하면 `--cache disk` 를 씁니다.
+- Windows 에서 `Couldn't open shared file mapping … error code: <1455>` (페이징 파일 부족) 이 나면 `--workers 2` 처럼 데이터 로더 프로세스를 줄입니다.
 
 ## 8. 문제 해결
 
