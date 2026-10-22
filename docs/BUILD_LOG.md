@@ -2753,3 +2753,54 @@ occluded 8장은 거의 같은 이미지다.
 
 - 홈페이지 반영 필요: s2 최종 결과 (누움 2/28 → 22/28, 가려짐 5/23 그대로, 사람 없는 곳 오검출 0) 와 위 한계
 - 다음 판 후보 (이번에 하지 않음): 이불 가림·배경·다른 방 학습 데이터, 웹캠 녹화로 새 시험 세트
+
+## 도구 — 모델·엔진 업데이트 확인 스킬 `model-update-check` (2026-10-22)
+
+**이유**: 홈페이지 챗봇이 쓰는 Gemini 모델의 지원 종료, Vision 학습에 고정한 Ultralytics 이후 변경,
+추론 엔진 후보(NCNN·ONNX Runtime·MediaPipe)의 ARM 관련 변경을 놓치지 않으려고, 개발 문서 페이지를 가져와
+지난 확인 이후 새 항목만 보고하는 Claude Code 스킬을 만들었다.
+
+### 만든 파일
+
+| 경로 | 역할 |
+| --- | --- |
+| `.claude/skills/model-update-check/SKILL.md` | 동작 순서 · 판단 규칙 · 보고서 형식 |
+| `.claude/skills/model-update-check/pages.md` | 확인할 페이지 5개와 페이지별 쓰는 방식 · 판단 규칙 (추가 · 삭제는 이 파일만) |
+| `.claude/skills/model-update-check/report-template.md` | 보고서 틀 |
+| `.claude/skills/model-update-check/scripts/compare.mjs` | lastSeen 이후 항목 고르기 (버전 순서 · 날짜 비교, 문자열 비교 아님) |
+| `docs/model-updates/state.json` | 페이지별 `lastChecked` · `lastSeen` (커밋해서 세션 간 공유) |
+| `docs/model-updates/model-updates-2026-10-22.md` | 첫 실행 보고서 |
+
+- 페이지 가져오기는 parallel-search MCP 의 `web_fetch` 만 쓴다. 실패하면 다른 방법으로 대신하지 않고 보고서에 이유를 적는다.
+- Gemini 는 영어 원문(`/gemini-api/docs/changelog`)을 가져온다 (한국어 페이지는 갱신이 늦을 수 있음). 보고서는 한국어.
+- Ultralytics 는 고정 버전(`requirements.txt`) 이후 버전 수와 YOLO26 · 학습/export · 호환성 깨짐 항목만 따로 정리한다.
+- NCNN 은 추론 엔진 1순위, ONNX Runtime 은 2순위 후보 (`namong118/physical-ai` 의 `report/inference-engine-selection.md`).
+  ARM · Raspberry Pi · 성능 관련 변경은 "확인 필요" 로 판단한다.
+
+### 실행 검증 (실제 2회, 스킬 있음/없음 비교 평가는 사용자 결정으로 생략)
+
+- 1회차 (첫 실행): 5개 페이지 모두 가져옴. 페이지별 최근 3개를 기준 항목으로 보고서 작성, `state.json` 기록.
+  - 강조: `gemini-3.5-flash-lite`, `gemini-embedding-2` 의 지원 중단 · 종료 공지는 가져온 범위에 없음.
+    2026-07-21 절의 `temperature`/`top_p`/`top_k` deprecated 공지는 적용 범위 확인 필요.
+  - Ultralytics 고정 `8.4.175` 이후 8개 (`v8.4.176`~`v8.4.183`), 모두 YOLO26 · 학습 · export 관련 → 확인 필요.
+- 2회차: 5개 페이지 모두 새 항목 0개 → "변경 없음" (보고서 만들지 않음).
+  - 발견: `web_fetch` 는 발췌를 돌려주고 요청마다 범위가 달라진다. 2회차 Gemini 발췌에 lastSeen(2026-10-13) 절이 빠졌다.
+    objective 를 "2026-10-13 이후 항목" 으로 좁혀 다시 가져오자 나왔다. 이 처리(objective 에 lastSeen 넣기,
+    lastSeen 이 안 보이면 같은 도구로 한 번 재요청, 그래도 없으면 상태 갱신 안 함)를 `SKILL.md` 에 반영했다.
+  - 2회차 발췌에서 1회차에 없던 릴리스 날짜와 `v8.4.176` 태그가 확인되어 1회차 보고서에 채웠다 (보고서에 표시).
+- `compare.mjs` 단위 확인: `8.4.9 < 8.4.175`, `8.5.0-rc1 < 8.5.0`, `20260113 < 20261020`, 잘못된 날짜 `2026-02-30` 거부.
+
+### 한계
+
+- 발췌 방식이라 한 번에 페이지 전체를 보지 못한다. 위 재요청 규칙으로 줄였지만, 새 항목 여러 개 중 중간 항목이
+  발췌에서 빠지면 놓칠 수 있다 (미검증 — 새 항목이 생긴 상황에서 아직 실행해 보지 않음).
+- ONNX Runtime 은 버전 순서로 비교하므로 이전 계열 패치(예: `v1.28.x`)는 새 항목으로 잡지 않고 한 줄로만 적는다.
+- 영향 판단의 근거는 페이지 내용과 `pages.md` 의 "쓰는 방식" 뿐이다. 홈페이지 챗봇 코드(`namong118/physical-ai`)는 보지 않는다.
+
+### 진행 중 / 남은 일
+
+- 커밋 대기 (사용자 확인 후).
+- 확인 필요: Gemini 2026-07-21 `temperature`/`top_p`/`top_k` deprecated 공지가 `gemini-3.5-flash-lite` 에 적용되는지.
+  홈페이지 챗봇(`namong118/physical-ai` 의 `supabase/functions/site-chat/index.ts` 162줄)이 `generationConfig` 에
+  `temperature: 0` 을 넘기고 있다. physical-ai 세션에서 따로 확인할 예정.
+- Ultralytics 고정 버전을 올릴지는 이번에 정하지 않음. 올리면 s1 기준 재측정 여부를 함께 정한다.
