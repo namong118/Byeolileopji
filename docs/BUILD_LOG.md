@@ -2804,3 +2804,6 @@ occluded 8장은 거의 같은 이미지다.
   홈페이지 챗봇(`namong118/physical-ai` 의 `supabase/functions/site-chat/index.ts` 162줄)이 `generationConfig` 에
   `temperature: 0` 을 넘기고 있다. physical-ai 세션에서 따로 확인할 예정.
 - Ultralytics 고정 버전을 올릴지는 이번에 정하지 않음. 올리면 s1 기준 재측정 여부를 함께 정한다.
+- 다음 작업 (미구현): `web_fetch` objective 에 lastSeen 값을 넣어 그 이후 항목 **전부**를 요청하기.
+  현재 `SKILL.md` 는 objective 에 lastSeen 을 기준점으로 넣고, lastSeen 이 안 보일 때만 좁혀서 한 번 재요청한다.
+- 다음 작업 (미구현): Ultralytics 처럼 패치 번호가 연속인 페이지는 번호가 비면 "누락 가능" 으로 표시하기.
