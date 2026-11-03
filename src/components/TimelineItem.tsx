@@ -5,6 +5,8 @@ import { colors, fontFamily, radius, spacing, typography } from '../constants/th
 import type { CareEvent } from '../types/events';
 import { presentEvent, presentEventCategory } from '../utils/eventPresenter';
 import { formatClock } from '../utils/time';
+import { readPosture } from '../utils/posture';
+import { PostureIcon } from './demo/PostureIcon';
 
 interface TimelineItemProps {
   event: CareEvent;
@@ -45,6 +47,7 @@ export function TimelineItem({
 }: TimelineItemProps) {
   const message = overrideMessage ?? presentEvent(event).message;
   const badge = CATEGORY_BADGE[presentEventCategory(event.eventType)];
+  const posture = readPosture(event);
 
   return (
     <View
@@ -55,7 +58,12 @@ export function TimelineItem({
     >
       <Text style={styles.time}>{formatClock(event.occurredAt)}</Text>
       <View style={[styles.iconBadge, { backgroundColor: badge.bg }]}>
-        <Ionicons name={badge.icon} size={15} color={badge.color} />
+        {posture ? (
+          // XIAO 자세 이벤트만 자세별 아이콘 (그 외 이벤트는 기존 아이콘 그대로)
+          <PostureIcon posture={posture.posture} size={15} color={badge.color} />
+        ) : (
+          <Ionicons name={badge.icon} size={15} color={badge.color} />
+        )}
       </View>
       <View style={styles.textCol}>
         <Text style={styles.message}>{message}</Text>
