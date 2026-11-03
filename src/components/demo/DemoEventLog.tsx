@@ -11,7 +11,12 @@ import { DEMO_SNAPSHOT_URL } from '../../config/demoMode';
 import { colors, fontFamily, radius, spacing, typography } from '../../constants/theme';
 import { useCareStore } from '../../stores/careStore';
 import type { CareEvent } from '../../types/events';
-import { POSTURE_LABEL, readPosture, type PostureReading } from '../../utils/posture';
+import {
+  POSTURE_LABEL,
+  formatElapsedKorean,
+  readPosture,
+  type PostureReading,
+} from '../../utils/posture';
 import { readSnapshotSeq } from '../../utils/snapshot';
 import { formatClock } from '../../utils/time';
 import { CheckBadge } from './CheckBadge';
@@ -66,7 +71,7 @@ function CurrentStateCard() {
           </View>
           <Text style={styles.meta}>
             {alert.needsCheck
-              ? `${latest.location ?? '-'}에서 ${Math.floor(alert.lyingElapsedMs / 1000)}초째 누워 있음`
+              ? `${latest.location ?? '-'}에서 ${formatElapsedKorean(alert.lyingElapsedMs)} 누워 있음`
               : `${formatClock(latest.occurredAt)} 확정`}
           </Text>
         </>

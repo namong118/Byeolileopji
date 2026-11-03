@@ -89,3 +89,12 @@ export function computePostureAlert(
   const needsCheck = latest.location !== BED_LOCATION && lyingElapsedMs >= thresholdMs;
   return { latest, needsCheck, lyingElapsedMs };
 }
+
+/** 지속 시간 표시: 60초 미만 "N초째", 60분 미만 "N분째", 그 이상 "N시간 M분째" */
+export function formatElapsedKorean(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  if (totalSec < 60) return `${totalSec}초째`;
+  const totalMin = Math.floor(totalSec / 60);
+  if (totalMin < 60) return `${totalMin}분째`;
+  return `${Math.floor(totalMin / 60)}시간 ${totalMin % 60}분째`;
+}

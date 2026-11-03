@@ -35,7 +35,11 @@ import {
 import { docToCareEvent } from '../src/mappers/firestoreEventMapper.ts';
 import { selectActiveLink, selectDemoLink } from '../src/services/guardianLink.ts';
 import { presentEvent } from '../src/utils/eventPresenter.ts';
-import { DEFAULT_LYING_ALERT_SECONDS, computePostureAlert } from '../src/utils/posture.ts';
+import {
+  DEFAULT_LYING_ALERT_SECONDS,
+  computePostureAlert,
+  formatElapsedKorean,
+} from '../src/utils/posture.ts';
 import { isFreshSnapshotEvent, matchSnapshot, readSnapshotSeq } from '../src/utils/snapshot.ts';
 
 const KEY = 'test-device-key-xiao';
@@ -292,6 +296,15 @@ check('배지: 새 이벤트 없이 경과 시간만으로 30초 기준 판정 (
   // 자세 이벤트가 없으면 latest=null
   assert.equal(computePostureAlert([], at(0)).latest, null);
   assert.equal(DEFAULT_LYING_ALERT_SECONDS, 30);
+  // 지속 시간 표시 (배지 옆 문구)
+  assert.equal(formatElapsedKorean(on.lyingElapsedMs), '30초째');
+  assert.equal(formatElapsedKorean(0), '0초째');
+  assert.equal(formatElapsedKorean(59_999), '59초째');
+  assert.equal(formatElapsedKorean(60_000), '1분째');
+  assert.equal(formatElapsedKorean(59 * 60_000 + 59_000), '59분째');
+  assert.equal(formatElapsedKorean(60 * 60_000), '1시간 0분째');
+  assert.equal(formatElapsedKorean(2 * 3_600_000 + 5 * 60_000 + 30_000), '2시간 5분째');
+  assert.equal(formatElapsedKorean(-1000), '0초째');
 });
 
 // ── 판단 근거 스냅샷: snapshotSeq (번호만, 사진은 서버로 오지 않음) ─────

@@ -3,6 +3,7 @@ import { Tabs } from 'expo-router';
 
 import { colors } from '../../src/constants/theme';
 import { labels } from '../../src/constants/strings';
+import { DEMO_FRAME_INSETS, useInDemoFrame } from '../../src/components/demo/DemoWebShell';
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
 
@@ -35,6 +36,8 @@ function TabIcon({
 }
 
 export default function TabsLayout() {
+  // 웹 데모 폰 프레임(폭 1024px 이상) 안에서만: 창 폭 기준 "beside-icon" 배치를 막고 탭바를 키운다.
+  const inDemoFrame = useInDemoFrame();
   return (
     <Tabs
       screenOptions={{
@@ -44,7 +47,13 @@ export default function TabsLayout() {
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
+          ...(inDemoFrame
+            ? { height: 72 + DEMO_FRAME_INSETS.bottom, paddingTop: 8, paddingBottom: DEMO_FRAME_INSETS.bottom + 4 }
+            : null),
         },
+        ...(inDemoFrame
+          ? { tabBarLabelPosition: 'below-icon' as const, tabBarLabelStyle: { fontSize: 12, lineHeight: 16, marginTop: 4 }, tabBarItemStyle: { height: 60 } }
+          : null),
       }}
     >
       <Tabs.Screen
