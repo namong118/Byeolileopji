@@ -23,6 +23,16 @@
 - heartbeat 는 esp32-pir 와 같은 방식 (부팅 1회 · 10분 주기 · Wi-Fi 재연결 · 방 전환 시 새 DEVICE_ID).
 - 원본 영상은 저장·전송하지 않는다.
 
+## 판단 근거 스냅샷 (`DEMO_SNAPSHOT`, 기본 꺼짐)
+
+데모에서 "왜 이 자세로 판단했는지"를 보여주기 위한 선택 기능이다. 스트리밍이 아니다.
+
+- `config.h` 의 `DEMO_SNAPSHOT` 을 `true` 로 바꾸면, 자세가 확정돼 전송하는 순간의 프레임(JPEG) **1장만** RAM 에 보관한다. 다음 확정 때 덮어쓴다.
+- 로컬 네트워크에서 `GET http://<XIAO IP>:81/snapshot` 으로 받을 수 있다 (CORS 허용, `X-Snapshot-Seq` 헤더).
+- 이벤트 POST 에는 사진 대신 `snapshotSeq`(증가 번호)만 넣는다. 웹 데모가 이 번호로 사진과 이벤트를 맞춘다.
+- **원칙: 사진은 로컬 네트워크로만 제공하고 서버(Worker · Firestore)로 전송·저장하지 않는다.** 플래시·SD 에도 쓰지 않으며 전원을 끄면 사라진다. 실제 보호대상 환경에서는 켜지 않는다.
+- 웹 데모는 `EXPO_PUBLIC_DEMO_SNAPSHOT_URL=http://<XIAO IP>:81/snapshot` 이 있을 때만 받아서 브라우저 메모리에만 둔다. https 로 호스팅한 페이지에서는 브라우저가 http 요청을 막으므로 로컬(`npx expo start --web`)에서 쓴다.
+
 ## 준비
 
 1. `cp secrets.example.h secrets.h` 후 Wi-Fi · `DEVICE_KEY` 입력 (`secrets.h` 는 커밋 금지).

@@ -54,9 +54,9 @@ export function safeEqual(a, b) {
 
 /**
  * 1단계: HTTP 요청 자체 검증 (method / key / JSON body).
- * 선택 필드 posture / confidence 는 있을 때만 검증해 결과에 담는다.
- * 둘 다 없으면 결과는 예전과 동일하다 ({ok, deviceId, eventType}).
- * @returns {{ok:true, deviceId:string, eventType:string, posture?:string, confidence?:number} | {ok:false, status:number, error:string}}
+ * 선택 필드 posture / confidence / snapshotSeq 는 있을 때만 검증해 결과에 담는다.
+ * 모두 없으면 결과는 예전과 동일하다 ({ok, deviceId, eventType}).
+ * @returns {{ok:true, deviceId:string, eventType:string, posture?:string, confidence?:number, snapshotSeq?:number} | {ok:false, status:number, error:string}}
  */
 export function validateRequest({ method, deviceKeyHeader, body }, { expectedDeviceKey }) {
   if (method !== 'POST') return fail(405, 'method_not_allowed');
@@ -92,6 +92,14 @@ export function validateRequest({ method, deviceKeyHeader, body }, { expectedDev
       return fail(400, 'invalid_confidence');
     }
     result.confidence = c;
+  }
+  // 판단 근거 스냅샷 번호 (XIAO DEMO_SNAPSHOT). 사진 자체는 받지 않는다 — 번호만.
+  if (body.snapshotSeq !== undefined) {
+    const n = body.snapshotSeq;
+    if (!Number.isSafeInteger(n) || n < 0) {
+      return fail(400, 'invalid_snapshotSeq');
+    }
+    result.snapshotSeq = n;
   }
   return result;
 }

@@ -118,7 +118,8 @@ async function handleIngest(request, env) {
 
   // 4) 디바이스 검증 (존재 / enabled / type / eventType 허용)
   const dv = validateDevice(device, v.eventType, {
-    hasPosture: v.posture !== undefined || v.confidence !== undefined,
+    hasPosture:
+      v.posture !== undefined || v.confidence !== undefined || v.snapshotSeq !== undefined,
   });
   if (!dv.ok) {
     log(`ingest reject ${dv.status} ${dv.error} (device=${v.deviceId})`);
@@ -132,6 +133,7 @@ async function handleIngest(request, env) {
     device,
     posture: v.posture,
     confidence: v.confidence,
+    snapshotSeq: v.snapshotSeq,
   });
   let eventId;
   try {

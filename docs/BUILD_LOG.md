@@ -2870,3 +2870,11 @@ occluded 8장은 거의 같은 이미지다.
 - 배포 (사용자 실행): `register-xiao-demo-devices.mjs --apply` → Worker 배포(새 eventType 없음, posture 필드 추가만) → 웹 데모 실행. 실제 보호대상 ID 가 `zz-demo-xiao` 보다 사전순 앞인지 확인.
 - GitHub Actions CI 첫 실행 결과 확인.
 - 홈페이지 반영 필요: XIAO 자세 인식 데모(실기기 미검증), smoke 테스트 수 증가.
+
+### 추가 — 판단 근거 스냅샷 (스트리밍 아님, 2026-11-03)
+- 펌웨어 `DEMO_SNAPSHOT`(config.h, 기본 false): 자세 확정·전송 시점 프레임(JPEG) 1장을 PSRAM 에만 보관 → 포트 81 `GET /snapshot`(최신 1장, CORS 허용, `X-Snapshot-Seq` 헤더). 이벤트 POST 에 `snapshotSeq`. **사진은 로컬 네트워크로만 제공, 서버로 전송·저장하지 않음** (README 명시).
+- Worker: `snapshotSeq`(선택, 0 이상 안전 정수) 검증 → payload 저장. 없는 요청은 기존과 동일. PIR 기기가 보내면 422.
+- 웹 데모: `EXPO_PUBLIC_DEMO_SNAPSHOT_URL` 이 있으면, 화면을 연 뒤 들어온 이벤트마다 `/snapshot` 을 받아 번호가 맞을 때만 로그 줄에 썸네일(방·자세·confidence 오버레이) → 클릭 시 크게 보기. blob URL 로 브라우저 메모리에만(최대 20장). 실패·번호 불일치·화면 열기 전 이벤트는 "사진 없음".
+- 검증: smoke PASS(xiao 16개), typecheck·lint PASS, posture_vote 31 PASS, web export 번들 PASS. **실기기 `/snapshot`·웹 썸네일 표시는 미검증** (로그인 + 실기기 필요).
+- 참고: `src/config/env.ts` 는 `process.env[name]` 동적 접근이라 `expo export`(정적 빌드)에는 EXPO_PUBLIC 값이 인라인되지 않는다 (기존 Firebase 변수도 같음). 데모는 `npx expo start --web` 으로 실행한다.
+- 남은 일 추가: 실기기에서 `DEMO_SNAPSHOT=true` 로 `/snapshot` 응답·PSRAM 여유·추론 주기 영향 확인, 웹에서 썸네일·CORS 확인. https 호스팅에서는 mixed content 로 막힘.

@@ -27,6 +27,8 @@ export const env = {
   demoRecipientId: read('EXPO_PUBLIC_DEMO_RECIPIENT_ID'),
   /** 데모 "확인이 필요해요" 배지: 침대 밖 lying 지속 기준(초). 기본 30 */
   demoLyingAlertSeconds: read('EXPO_PUBLIC_DEMO_LYING_ALERT_SECONDS'),
+  /** XIAO 판단 근거 스냅샷 로컬 주소 (예: http://192.168.0.20:81/snapshot). 웹 데모 전용 */
+  demoSnapshotUrl: read('EXPO_PUBLIC_DEMO_SNAPSHOT_URL'),
 } as const;
 
 /**

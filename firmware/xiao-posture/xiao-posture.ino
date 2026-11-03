@@ -9,6 +9,10 @@
  *   BOOT 버튼(GPIO0): 다음 방(DEVICE_ID)으로 순환 + 투표 버퍼 초기화 + 시리얼에 현재 방 출력.
  *   원본 영상은 저장·전송하지 않는다 (분류 결과만 전송).
  *
+ *   DEMO_SNAPSHOT=true (config.h, 기본 false) 일 때만: 자세 확정·전송 시점의 프레임 1장을
+ *   RAM 에 보관하고 로컬 네트워크 GET http://<IP>:81/snapshot 으로 제공한다 (최신 1장만,
+ *   스트리밍 아님, 서버로 전송·저장하지 않음). 이벤트 POST 에 snapshotSeq 를 넣는다.
+ *
  * 보드: XIAO_ESP32S3, PSRAM: OPI PSRAM (Arduino IDE > Tools)
  */
 
@@ -26,6 +30,10 @@
 #include "config.h"
 #include "secrets.h"
 #include "posture_vote.h"
+
+#if DEMO_SNAPSHOT
+#include <WebServer.h>
+#endif
 
 // ── XIAO ESP32-S3 Sense 카메라 핀 (OV2640, Seeed 공식 핀맵) ─────────────
 #define PWDN_GPIO_NUM   -1
@@ -64,6 +72,65 @@ static int           lastButtonLevel    = HIGH;
 static unsigned long lastButtonChangeMs = 0;
 
 static const char *currentDeviceId() { return ROOM_DEVICE_IDS[roomIndex]; }
+
+// ── 판단 근거 스냅샷 (DEMO_SNAPSHOT) ────────────────────────────────────
+// lastFrame: 매 추론 프레임의 JPEG 복사본 (다음 프레임에 덮어씀)
+// snapshot : 자세 확정·전송 시점에 lastFrame 을 복사한 최신 1장. RAM 에만 있다.
+#if DEMO_SNAPSHOT
+static WebServer     snapshotServer(SNAPSHOT_PORT);
+static uint8_t      *lastFrameJpg  = nullptr;
+static size_t        lastFrameLen  = 0;
+static uint8_t      *snapshotJpg   = nullptr;
+static size_t        snapshotLen   = 0;
+static uint32_t      snapshotSeq   = 0;   // 0 = 아직 없음
+
+void keepLastFrame(const uint8_t *buf, size_t len) {
+  if (!lastFrameJpg || len > SNAPSHOT_MAX_BYTES) {
+    lastFrameLen = 0;
+    return;
+  }
+  memcpy(lastFrameJpg, buf, len);
+  lastFrameLen = len;
+}
+
+// 전송 직전에 호출 → 증가한 seq 반환 (보관 실패 시 0 = snapshotSeq 생략)
+uint32_t promoteSnapshot() {
+  if (!snapshotJpg || lastFrameLen == 0) return 0;
+  memcpy(snapshotJpg, lastFrameJpg, lastFrameLen);
+  snapshotLen = lastFrameLen;
+  snapshotSeq++;
+  return snapshotSeq;
+}
+
+void handleSnapshotRequest() {
+  snapshotServer.sendHeader("Access-Control-Allow-Origin", "*");
+  snapshotServer.sendHeader("Access-Control-Expose-Headers", "X-Snapshot-Seq");
+  snapshotServer.sendHeader("Cache-Control", "no-store");
+  if (snapshotLen == 0) {
+    snapshotServer.send(404, "text/plain", "no snapshot");
+    return;
+  }
+  snapshotServer.sendHeader("X-Snapshot-Seq", String(snapshotSeq));
+  snapshotServer.setContentLength(snapshotLen);
+  snapshotServer.send(200, "image/jpeg", "");
+  snapshotServer.sendContent((const char *)snapshotJpg, snapshotLen);
+}
+
+void snapshotBegin() {
+  lastFrameJpg = (uint8_t *)ps_malloc(SNAPSHOT_MAX_BYTES);
+  snapshotJpg = (uint8_t *)ps_malloc(SNAPSHOT_MAX_BYTES);
+  if (!lastFrameJpg || !snapshotJpg) {
+    Serial.println("[Snap] PSRAM alloc failed — snapshot disabled");
+    return;
+  }
+  snapshotServer.on("/snapshot", HTTP_GET, handleSnapshotRequest);
+  snapshotServer.onNotFound([]() { snapshotServer.send(404, "text/plain", "not found"); });
+  snapshotServer.begin();
+  Serial.printf("[Snap] DEMO_SNAPSHOT on — GET http://<ip>:%d/snapshot (local only)
+",
+                SNAPSHOT_PORT);
+}
+#endif
 
 // ── Wi-Fi (esp32-pir 와 동일) ───────────────────────────────────────────
 void wifiConnect() {
@@ -129,12 +196,15 @@ int postJson(const char *url, const String &body, int maxRetries, unsigned long 
   return lastCode;
 }
 
-int postPosture(Posture p, float confidence) {
+// snapshotSeq: 0 이면 생략 (DEMO_SNAPSHOT 꺼짐 / 보관 실패)
+int postPosture(Posture p, float confidence, uint32_t snapshotSeqValue) {
   const char *name = posture_api_name(p);
   if (!name) return -1;  // no_person / unknown 은 전송하지 않는다
   String body = String("{\"deviceId\":\"") + currentDeviceId() +
                 "\",\"eventType\":\"motion_detected\",\"posture\":\"" + name +
-                "\",\"confidence\":" + String(confidence, 3) + "}";
+                "\",\"confidence\":" + String(confidence, 3);
+  if (snapshotSeqValue > 0) body += String(",\"snapshotSeq\":") + snapshotSeqValue;
+  body += "}";
   return postJson(INGEST_URL, body, HTTP_MAX_RETRIES, HTTP_RETRY_DELAY_MS, "HTTP");
 }
 
@@ -246,6 +316,9 @@ bool classifyFrame(Posture *outPosture, float *outConfidence) {
     return false;
   }
   bool ok = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, rgbBuf);
+#if DEMO_SNAPSHOT
+  keepLastFrame(fb->buf, fb->len);  // RAM 복사본 1장 (로컬 /snapshot 용, 서버 전송 없음)
+#endif
   esp_camera_fb_return(fb);  // 원본 프레임은 즉시 반환 — 저장·전송하지 않는다
   if (!ok) return false;
 
@@ -285,7 +358,11 @@ void handleInference() {
   if (r.send) {
     Serial.printf("[Posture] %s %s (%.2f) → POST\n", ROOM_NAMES[roomIndex],
                   posture_api_name(r.posture), r.confidence);
-    postPosture(r.posture, r.confidence);
+    uint32_t seq = 0;
+#if DEMO_SNAPSHOT
+    seq = promoteSnapshot();  // POST 전에 보관 → 앱이 이벤트를 받을 때 이미 준비돼 있다
+#endif
+    postPosture(r.posture, r.confidence, seq);
   }
 }
 
@@ -301,6 +378,9 @@ void setup() {
   }
   printRoom();
   wifiConnect();
+#if DEMO_SNAPSHOT
+  snapshotBegin();
+#endif
 }
 
 void loop() {
@@ -308,5 +388,8 @@ void loop() {
   handleButton();
   handleHeartbeat();
   handleInference();
+#if DEMO_SNAPSHOT
+  snapshotServer.handleClient();
+#endif
   delay(10);
 }

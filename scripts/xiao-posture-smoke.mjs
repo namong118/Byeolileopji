@@ -36,6 +36,7 @@ import { docToCareEvent } from '../src/mappers/firestoreEventMapper.ts';
 import { selectActiveLink, selectDemoLink } from '../src/services/guardianLink.ts';
 import { presentEvent } from '../src/utils/eventPresenter.ts';
 import { DEFAULT_LYING_ALERT_SECONDS, computePostureAlert } from '../src/utils/posture.ts';
+import { isFreshSnapshotEvent, matchSnapshot, readSnapshotSeq } from '../src/utils/snapshot.ts';
 
 const KEY = 'test-device-key-xiao';
 const XIAO = {
@@ -291,6 +292,55 @@ check('배지: 새 이벤트 없이 경과 시간만으로 30초 기준 판정 (
   // 자세 이벤트가 없으면 latest=null
   assert.equal(computePostureAlert([], at(0)).latest, null);
   assert.equal(DEFAULT_LYING_ALERT_SECONDS, 30);
+});
+
+// ── 판단 근거 스냅샷: snapshotSeq (번호만, 사진은 서버로 오지 않음) ─────
+check('snapshotSeq: 정수 ≥0 통과 → payload 저장, 잘못된 값 400', () => {
+  const base = { deviceId: 'xiao-living', eventType: 'motion_detected', posture: 'lying', confidence: 0.8 };
+  assert.equal(req({ ...base, snapshotSeq: 0 }).snapshotSeq, 0);
+  assert.equal(req({ ...base, snapshotSeq: 42 }).snapshotSeq, 42);
+  for (const snapshotSeq of [-1, 1.5, '3', null, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(req({ ...base, snapshotSeq }).error, 'invalid_snapshotSeq', `snapshotSeq=${snapshotSeq}`);
+  }
+  assert.equal('snapshotSeq' in req(base), false); // 없으면 결과에도 없음
+  const doc = buildEventDoc({ deviceId: 'xiao-living', eventType: 'motion_detected', device: XIAO, posture: 'lying', snapshotSeq: 42 });
+  assert.equal(doc.payload.snapshotSeq, 42);
+  const noSeq = buildEventDoc({ deviceId: 'xiao-living', eventType: 'motion_detected', device: XIAO, posture: 'lying' });
+  assert.equal('snapshotSeq' in noSeq.payload, false);
+  // PIR 기기는 snapshotSeq 도 보낼 수 없다 (index.js 가 hasPosture 로 넘긴다)
+  assert.equal(validateDevice(PIR, 'motion_detected', { hasPosture: true }).ok, false);
+});
+
+check('ingest: snapshotSeq → payload integerValue / PIR + snapshotSeq → 422', async () => {
+  let m = mockFirestore(XIAO);
+  try {
+    const res = await ingest({ deviceId: 'xiao-living', eventType: 'motion_detected', posture: 'sitting', confidence: 0.7, snapshotSeq: 7 });
+    assert.equal(res.status, 201);
+    const post = m.calls.find((c) => c.method === 'POST' && c.url.includes('/events'));
+    assert.equal(post.body.fields.payload.mapValue.fields.snapshotSeq.integerValue, '7');
+  } finally {
+    m.restore();
+  }
+  m = mockFirestore(PIR);
+  try {
+    const res = await ingest({ deviceId: 'dev-device-livingroom', eventType: 'motion_detected', snapshotSeq: 1 });
+    assert.equal(res.status, 422);
+  } finally {
+    m.restore();
+  }
+});
+
+check('웹 스냅샷 매칭: 번호 일치만 붙이고, 화면 연 뒤 이벤트만 받는다', () => {
+  const e = { ...pev('s', '거실', 'lying', T0), metadata: { posture: 'lying', snapshotSeq: 5 } };
+  assert.equal(readSnapshotSeq(e), 5);
+  assert.equal(readSnapshotSeq(pev('n', '거실', 'lying', T0)), undefined);
+  assert.equal(matchSnapshot(5, '5'), 'match');
+  assert.equal(matchSnapshot(5, '6'), 'stale'); // 그 사이 다음 확정이 덮어씀 → 사진 없음
+  assert.equal(matchSnapshot(5, null), 'unknown');
+  const since = Date.parse(T0);
+  assert.equal(isFreshSnapshotEvent(e, since), true);
+  assert.equal(isFreshSnapshotEvent(e, since + 60_000), false); // 화면 열기 전 이벤트
+  assert.equal(isFreshSnapshotEvent(pev('n', '거실', 'lying', T0), since), false);
 });
 
 console.log('XIAO posture smoke test');

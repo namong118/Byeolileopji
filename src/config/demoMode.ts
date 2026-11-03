@@ -29,4 +29,7 @@ function parseSeconds(raw: string | undefined): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_LYING_ALERT_SECONDS;
 }
 
+/** 데모 모드이고 값이 있을 때만. 사진은 로컬 XIAO 에서 받아 브라우저 메모리에만 둔다. */
+export const DEMO_SNAPSHOT_URL: string | undefined = isDemoMode ? env.demoSnapshotUrl : undefined;
+
 export const DEMO_LYING_ALERT_MS = parseSeconds(env.demoLyingAlertSeconds) * 1000;
