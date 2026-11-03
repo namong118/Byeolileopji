@@ -48,6 +48,7 @@ import { deriveCareStatus, applyStatusOverride } from '../services/careStatus';
 import { deriveDeviceHealth } from '../services/deviceHealth';
 import { careStatusConfig } from '../config/careStatusConfig';
 import { DEV_DEVICE_ID } from '../config/careContext';
+import { DEMO_DEVICE_ID, isDemoMode } from '../config/demoMode';
 import {
   presentHome,
   presentStaleHome,
@@ -372,7 +373,8 @@ export const useCareStore = create<CareState>((set, get) => ({
   init: async (careRecipientId) => {
     if (activeCareRecipientId === careRecipientId) return; // 이미 이 대상으로 초기화됨
     activeCareRecipientId = careRecipientId;
-    initCareDataSource(careRecipientId, DEV_DEVICE_ID);
+    // 웹 데모 모드: 실제 PIR 기기 대신 데모 기기 문서를 구독한다 (데모 연결만으로 읽을 수 있게).
+    initCareDataSource(careRecipientId, isDemoMode ? DEMO_DEVICE_ID : DEV_DEVICE_ID);
 
     set({ loading: true, loadError: undefined, dataSource: getEventDataSource() });
     try {

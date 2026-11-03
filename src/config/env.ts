@@ -23,6 +23,10 @@ export const firebaseConfig = {
 export const env = {
   careRecipientIdOverride: read('EXPO_PUBLIC_CARE_RECIPIENT_ID'),
   deviceIdOverride: read('EXPO_PUBLIC_DEVICE_ID'),
+  /** XIAO 자세 인식 웹 데모 보호대상 ID. 웹(Platform.OS==='web')에서만 쓰인다 — demoMode.ts */
+  demoRecipientId: read('EXPO_PUBLIC_DEMO_RECIPIENT_ID'),
+  /** 데모 "확인이 필요해요" 배지: 침대 밖 lying 지속 기준(초). 기본 30 */
+  demoLyingAlertSeconds: read('EXPO_PUBLIC_DEMO_LYING_ALERT_SECONDS'),
 } as const;
 
 /**

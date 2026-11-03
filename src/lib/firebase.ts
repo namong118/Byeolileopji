@@ -28,7 +28,8 @@
 
 import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import { initializeFirestore, type Firestore } from 'firebase/firestore';
-import { initializeAuth, type Auth } from '@firebase/auth';
+import { Platform } from 'react-native';
+import { browserLocalPersistence, initializeAuth, type Auth } from '@firebase/auth';
 // @ts-expect-error — @firebase/auth 의 "types" 조건(auth-public.d.ts)에는 RN 전용
 // getReactNativePersistence 가 없다. 런타임(rn/index.js)에는 실제로 존재한다.
 import { getReactNativePersistence } from '@firebase/auth';
@@ -81,8 +82,12 @@ export function getFirebaseAuth(): Auth | null {
   const app = getFirebaseApp();
   if (!app) return null;
 
+  // 웹(XIAO 데모)에는 getReactNativePersistence 가 없다 → 브라우저 persistence. 모바일은 기존 그대로.
   authInstance = initializeAuth(app, {
-    persistence: getReactNativePersistence(AsyncStorage),
+    persistence:
+      Platform.OS === 'web'
+        ? browserLocalPersistence
+        : getReactNativePersistence(AsyncStorage),
   });
   return authInstance;
 }

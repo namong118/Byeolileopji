@@ -74,3 +74,14 @@ export function selectActiveLink(
   );
   return sorted[0];
 }
+
+/**
+ * XIAO 웹 데모 모드 전용 — 데모 보호대상(demoRecipientId) 연결만 고른다.
+ * 연결이 없거나 꺼져 있으면 null ("연결 없음" 화면). 실제 보호대상으로 몰래 fallback 하지 않는다.
+ */
+export function selectDemoLink(
+  links: readonly GuardianLinkDoc[],
+  demoRecipientId: string,
+): GuardianLinkDoc | null {
+  return links.find((l) => l.enabled && l.careRecipientId === demoRecipientId) ?? null;
+}

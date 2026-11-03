@@ -33,7 +33,9 @@ import {
   buildDemoRegistry,
 } from './register-xiao-demo-devices.mjs';
 import { docToCareEvent } from '../src/mappers/firestoreEventMapper.ts';
-import { selectActiveLink } from '../src/services/guardianLink.ts';
+import { selectActiveLink, selectDemoLink } from '../src/services/guardianLink.ts';
+import { presentEvent } from '../src/utils/eventPresenter.ts';
+import { DEFAULT_LYING_ALERT_SECONDS, computePostureAlert } from '../src/utils/posture.ts';
 
 const KEY = 'test-device-key-xiao';
 const XIAO = {
@@ -158,6 +160,13 @@ check('데모 격리: Cron 대상이 아니고, 앱은 실제 보호대상을 �
     { guardianUid: 'u', careRecipientId: real, enabled: true },
   ]);
   assert.equal(active?.careRecipientId, real);
+  // 웹 데모 모드는 데모 연결만 고르고, 없으면 실제 대상으로 fallback 하지 않는다.
+  const links = [
+    { guardianUid: 'u', careRecipientId: real, enabled: true },
+    { guardianUid: 'u', careRecipientId: DEMO_RECIPIENT_ID_DEFAULT, enabled: true },
+  ];
+  assert.equal(selectDemoLink(links, DEMO_RECIPIENT_ID_DEFAULT)?.careRecipientId, DEMO_RECIPIENT_ID_DEFAULT);
+  assert.equal(selectDemoLink(links.slice(0, 1), DEMO_RECIPIENT_ID_DEFAULT), null);
 });
 
 // ── ingest 엔드투엔드 (mock fetch) ─────────────────────────────────────
@@ -243,6 +252,45 @@ check('ingest: 기존 PIR 요청 → 201, payload 변화 없음', async () => {
   } finally {
     m.restore();
   }
+});
+
+// ── 앱 표시: 자세 문구 + "확인이 필요해요" 배지 (순수 함수) ─────────────
+const pev = (id, location, posture, iso, confidence = 0.9) => ({
+  id,
+  eventType: 'motion_detected',
+  source: 'sensor',
+  location,
+  occurredAt: iso,
+  metadata: { origin: 'esp32', deviceType: 'ESP32_POSTURE', posture, confidence },
+});
+const T0 = '2026-11-03T05:00:00.000Z';
+const at = (sec) => new Date(Date.parse(T0) + sec * 1000);
+
+check('presentEvent: 자세 문구 / PIR 문구는 그대로', () => {
+  assert.equal(presentEvent(pev('a', '거실', 'sitting', T0)).message, '거실에서 앉아 있어요.');
+  assert.equal(presentEvent(pev('b', '침대', 'lying', T0)).message, '침대에 누워 있어요.');
+  assert.equal(presentEvent(pev('c', '부엌', 'standing', T0)).message, '부엌에서 서 있어요.');
+  const pir = { id: 'p', eventType: 'motion_detected', source: 'sensor', location: '거실', occurredAt: T0 };
+  assert.equal(presentEvent(pir).message, '거실에서 활동이 확인됐어요.');
+});
+
+check('배지: 새 이벤트 없이 경과 시간만으로 30초 기준 판정 (침대 제외)', () => {
+  const lyingLiving = [pev('1', '거실', 'sitting', T0), pev('2', '거실', 'lying', at(5).toISOString())];
+  // 마지막 lying 이후 이벤트가 더 오지 않아도, now 만 흐르면 배지가 켜진다.
+  assert.equal(computePostureAlert(lyingLiving, at(5 + 29), 30_000).needsCheck, false);
+  const on = computePostureAlert(lyingLiving, at(5 + 30), 30_000);
+  assert.equal(on.needsCheck, true);
+  assert.equal(on.lyingElapsedMs, 30_000);
+  assert.equal(on.latest?.location, '거실');
+  // 침대에서는 오래 누워 있어도 배지 없음
+  const bed = [pev('3', '침대', 'lying', T0)];
+  assert.equal(computePostureAlert(bed, at(600), 30_000).needsCheck, false);
+  // 일어나면(최신 자세가 lying 아님) 꺼진다 — 입력 순서와 무관
+  const up = [pev('5', '거실', 'standing', at(40).toISOString()), ...lyingLiving];
+  assert.equal(computePostureAlert(up, at(100), 30_000).needsCheck, false);
+  // 자세 이벤트가 없으면 latest=null
+  assert.equal(computePostureAlert([], at(0)).latest, null);
+  assert.equal(DEFAULT_LYING_ALERT_SECONDS, 30);
 });
 
 console.log('XIAO posture smoke test');

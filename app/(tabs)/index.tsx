@@ -14,6 +14,8 @@ import {
 import { labels } from '../../src/constants/strings';
 import { colors, fontFamily, spacing, typography } from '../../src/constants/theme';
 import { useCareStore } from '../../src/stores/careStore';
+import { isDemoMode } from '../../src/config/demoMode';
+import { DemoStatusCard } from '../../src/components/demo/DemoStatusCard';
 import { presentDeviceSummaryCard } from '../../src/utils/deviceHealthText';
 import { buildHomeSummary } from '../../src/utils/homeSummary';
 import { buildTodayActivitySummary } from '../../src/utils/todayActivity';
@@ -71,15 +73,20 @@ export default function HomeScreen() {
       <Text style={styles.dateText}>{today}</Text>
 
       <View style={styles.heroWrap}>
-        <StatusHero
-          tone={statusText.tone}
-          headline={statusText.headline}
-          subtext={statusText.detail}
-          lastActivityLabel={
-            summary.lastActivityText ? labels.lastActivity : undefined
-          }
-          lastActivityValue={summary.lastActivityText}
-        />
+        {isDemoMode ? (
+          // 웹 데모 모드: Cron 이 데모 대상을 판정하지 않아 서버 상태가 없다 → 데모 카드로 대체.
+          <DemoStatusCard />
+        ) : (
+          <StatusHero
+            tone={statusText.tone}
+            headline={statusText.headline}
+            subtext={statusText.detail}
+            lastActivityLabel={
+              summary.lastActivityText ? labels.lastActivity : undefined
+            }
+            lastActivityValue={summary.lastActivityText}
+          />
+        )}
       </View>
 
       {!loadError ? (

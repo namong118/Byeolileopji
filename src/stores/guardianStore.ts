@@ -22,8 +22,9 @@ import { create } from 'zustand';
 
 import { getFirestoreDb } from '../lib/firebase';
 import { queryGuardianLinksByUid } from '../services/firestore/guardianLinkRepository';
-import { selectActiveLink } from '../services/guardianLink';
+import { selectActiveLink, selectDemoLink } from '../services/guardianLink';
 import { DEV_CARE_RECIPIENT_ID } from '../config/careContext';
+import { DEMO_RECIPIENT_ID } from '../config/demoMode';
 
 interface GuardianState {
   /**
@@ -68,7 +69,10 @@ export const useGuardianStore = create<GuardianState>((set) => ({
           );
         }
       }
-      const active = selectActiveLink(links);
+      // 웹 데모 모드(demoMode.ts)에서만 데모 보호대상 연결을 고른다. 그 외는 기존 그대로.
+      const active = DEMO_RECIPIENT_ID
+        ? selectDemoLink(links, DEMO_RECIPIENT_ID)
+        : selectActiveLink(links);
       if (__DEV__) {
         console.log(
           `[별일없지][diag] resolveLink 결과 → careRecipientId=${active?.careRecipientId ?? 'null(연결 없음)'} (links=${links.length}건 중 선택)`,

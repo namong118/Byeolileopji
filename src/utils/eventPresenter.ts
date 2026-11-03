@@ -5,6 +5,7 @@
  */
 
 import type { CareEvent, EventType } from '../types/events';
+import { POSTURE_LABEL, postureMessage, readPosture } from './posture.ts';
 
 interface PresentedEvent {
   /** 타임라인 한 줄 문구 */
@@ -17,11 +18,20 @@ export function presentEvent(event: CareEvent): PresentedEvent {
   const place = event.location ?? '집';
 
   switch (event.eventType) {
-    case 'motion_detected':
+    case 'motion_detected': {
+      // XIAO 자세 인식 데모: metadata.posture 가 있을 때만 자세 문구 (PIR 이벤트는 기존 문구).
+      const reading = readPosture(event);
+      if (reading) {
+        return {
+          message: postureMessage(event.location, reading.posture),
+          shortMessage: `${place} · ${POSTURE_LABEL[reading.posture]}`,
+        };
+      }
       return {
         message: `${place}에서 활동이 확인됐어요.`,
         shortMessage: `${place}에서 활동`,
       };
+    }
     case 'door_opened':
       return {
         message: '현관문이 열렸어요.',

@@ -12,6 +12,8 @@ import { useCareStore } from '../src/stores/careStore';
 import { useAuthStore } from '../src/stores/authStore';
 import { useGuardianStore } from '../src/stores/guardianStore';
 import { registerForCareStatusPush } from '../src/services/pushRegistration';
+import { isDemoMode } from '../src/config/demoMode';
+import { DemoWebShell } from '../src/components/demo/DemoWebShell';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -73,6 +75,7 @@ export default function RootLayout() {
   useEffect(() => {
     // 로그인 + guardian 관계가 모두 확정된 후에만 push token 을 등록한다.
     if (!user || !careRecipientId) return;
+    if (isDemoMode) return; // 웹 데모 모드는 push token 을 등록하지 않는다.
     // 실기기 + development build + google-services.json 이 있을 때만 성공한다.
     // 그 외에는 조용히 실패한다 (앱 실행을 막지 않는다).
     void registerForCareStatusPush({ guardianUid: user.uid, careRecipientId });
@@ -90,53 +93,55 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }} onLayout={onRootLayout}>
       <SafeAreaProvider>
         <StatusBar style="dark" />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: colors.background },
-          }}
-        >
-          {/* authLoading/linkLoading 중에는 네 guard 가 모두 false → 아무 화면도
-              활성화되지 않는다 (보호자 화면이 잠깐 노출되는 것을 막는다).
-              linkError 는 "조회 자체 실패"(permission-denied 등) 이고 no-recipient 는
-              "조회 성공, 링크 없음" 이다 — 반드시 다른 화면으로 분리한다. */}
-          <Stack.Protected guard={!authLoading && !user}>
-            <Stack.Screen name="login" />
-          </Stack.Protected>
-          <Stack.Protected
-            guard={!authLoading && Boolean(user) && !linkLoading && Boolean(linkError)}
+        <DemoWebShell>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.background },
+            }}
           >
-            <Stack.Screen name="link-error" />
-          </Stack.Protected>
-          <Stack.Protected
-            guard={
-              !authLoading &&
-              Boolean(user) &&
-              !linkLoading &&
-              !linkError &&
-              !careRecipientId
-            }
-          >
-            <Stack.Screen name="no-recipient" />
-          </Stack.Protected>
-          <Stack.Protected
-            guard={
-              !authLoading &&
-              Boolean(user) &&
-              !linkLoading &&
-              !linkError &&
-              Boolean(careRecipientId)
-            }
-          >
-            <Stack.Screen name="(tabs)" />
-          </Stack.Protected>
-        </Stack>
-        {showLoadingOverlay ? (
-          <View style={[StyleSheet.absoluteFill, styles.loading]}>
-            <ActivityIndicator color={colors.accent} />
-            <Text style={styles.loadingText}>정보를 확인하고 있어요</Text>
-          </View>
-        ) : null}
+            {/* authLoading/linkLoading 중에는 네 guard 가 모두 false → 아무 화면도
+                활성화되지 않는다 (보호자 화면이 잠깐 노출되는 것을 막는다).
+                linkError 는 "조회 자체 실패"(permission-denied 등) 이고 no-recipient 는
+                "조회 성공, 링크 없음" 이다 — 반드시 다른 화면으로 분리한다. */}
+            <Stack.Protected guard={!authLoading && !user}>
+              <Stack.Screen name="login" />
+            </Stack.Protected>
+            <Stack.Protected
+              guard={!authLoading && Boolean(user) && !linkLoading && Boolean(linkError)}
+            >
+              <Stack.Screen name="link-error" />
+            </Stack.Protected>
+            <Stack.Protected
+              guard={
+                !authLoading &&
+                Boolean(user) &&
+                !linkLoading &&
+                !linkError &&
+                !careRecipientId
+              }
+            >
+              <Stack.Screen name="no-recipient" />
+            </Stack.Protected>
+            <Stack.Protected
+              guard={
+                !authLoading &&
+                Boolean(user) &&
+                !linkLoading &&
+                !linkError &&
+                Boolean(careRecipientId)
+              }
+            >
+              <Stack.Screen name="(tabs)" />
+            </Stack.Protected>
+          </Stack>
+          {showLoadingOverlay ? (
+            <View style={[StyleSheet.absoluteFill, styles.loading]}>
+              <ActivityIndicator color={colors.accent} />
+              <Text style={styles.loadingText}>정보를 확인하고 있어요</Text>
+            </View>
+          ) : null}
+        </DemoWebShell>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
