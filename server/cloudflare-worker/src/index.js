@@ -117,14 +117,22 @@ async function handleIngest(request, env) {
   }
 
   // 4) 디바이스 검증 (존재 / enabled / type / eventType 허용)
-  const dv = validateDevice(device, v.eventType);
+  const dv = validateDevice(device, v.eventType, {
+    hasPosture: v.posture !== undefined || v.confidence !== undefined,
+  });
   if (!dv.ok) {
     log(`ingest reject ${dv.status} ${dv.error} (device=${v.deviceId})`);
     return json({ ok: false, error: dv.error }, dv.status);
   }
 
   // 5) events 문서 생성 (occurredAt / createdAt = 서버 시각) — primary operation
-  const eventDoc = buildEventDoc({ deviceId: v.deviceId, eventType: v.eventType, device });
+  const eventDoc = buildEventDoc({
+    deviceId: v.deviceId,
+    eventType: v.eventType,
+    device,
+    posture: v.posture,
+    confidence: v.confidence,
+  });
   let eventId;
   try {
     eventId = await createEvent(env, eventDoc);

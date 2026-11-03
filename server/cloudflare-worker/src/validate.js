@@ -22,13 +22,22 @@ export const ALLOWED_EVENT_TYPES = [
 ];
 
 /** devices 레지스트리의 type 값 */
-export const ALLOWED_DEVICE_TYPES = ['ESP32_PIR', 'ESP32_DOOR'];
+export const ALLOWED_DEVICE_TYPES = ['ESP32_PIR', 'ESP32_DOOR', 'ESP32_POSTURE'];
 
 /** 디바이스 종류별로 보낼 수 있는 이벤트 타입 제한 */
 export const DEVICE_TYPE_EVENTS = {
   ESP32_PIR: ['motion_detected'],
   ESP32_DOOR: ['door_opened'],
+  // XIAO ESP32-S3 Sense 자세 인식 데모 — 새 eventType 없이 motion_detected 재사용.
+  // 자세는 선택 필드 posture/confidence → events.payload(앱 CareEvent.metadata)로 저장.
+  ESP32_POSTURE: ['motion_detected'],
 };
+
+/** 선택 필드 posture 허용 값 (no_person 은 펌웨어가 보내지 않는다) */
+export const ALLOWED_POSTURES = ['standing', 'sitting', 'lying'];
+
+/** posture/confidence 를 보낼 수 있는 디바이스 종류 */
+export const POSTURE_DEVICE_TYPES = ['ESP32_POSTURE'];
 
 function fail(status, error) {
   return { ok: false, status, error };
@@ -45,7 +54,9 @@ export function safeEqual(a, b) {
 
 /**
  * 1단계: HTTP 요청 자체 검증 (method / key / JSON body).
- * @returns {{ok:true, deviceId:string, eventType:string} | {ok:false, status:number, error:string}}
+ * 선택 필드 posture / confidence 는 있을 때만 검증해 결과에 담는다.
+ * 둘 다 없으면 결과는 예전과 동일하다 ({ok, deviceId, eventType}).
+ * @returns {{ok:true, deviceId:string, eventType:string, posture?:string, confidence?:number} | {ok:false, status:number, error:string}}
  */
 export function validateRequest({ method, deviceKeyHeader, body }, { expectedDeviceKey }) {
   if (method !== 'POST') return fail(405, 'method_not_allowed');
@@ -67,7 +78,22 @@ export function validateRequest({ method, deviceKeyHeader, body }, { expectedDev
   if (!ALLOWED_EVENT_TYPES.includes(eventType)) {
     return fail(400, 'unsupported_eventType');
   }
-  return { ok: true, deviceId: deviceId.trim(), eventType };
+  const result = { ok: true, deviceId: deviceId.trim(), eventType };
+
+  if (body.posture !== undefined) {
+    if (typeof body.posture !== 'string' || !ALLOWED_POSTURES.includes(body.posture)) {
+      return fail(400, 'invalid_posture');
+    }
+    result.posture = body.posture;
+  }
+  if (body.confidence !== undefined) {
+    const c = body.confidence;
+    if (typeof c !== 'number' || !Number.isFinite(c) || c < 0 || c > 1) {
+      return fail(400, 'invalid_confidence');
+    }
+    result.confidence = c;
+  }
+  return result;
 }
 
 /**
@@ -75,7 +101,7 @@ export function validateRequest({ method, deviceKeyHeader, body }, { expectedDev
  * @param device Firestore devices/{deviceId} 문서를 평문 객체로 변환한 것 (없으면 null)
  * @returns {{ok:true} | {ok:false, status:number, error:string}}
  */
-export function validateDevice(device, eventType) {
+export function validateDevice(device, eventType, { hasPosture = false } = {}) {
   if (!device) return fail(404, 'device_not_found');
   if (device.enabled !== true) return fail(403, 'device_disabled');
 
@@ -97,6 +123,10 @@ export function validateDevice(device, eventType) {
     : undefined;
   if (!allowed || !allowed.includes(eventType)) {
     return fail(422, 'event_type_not_allowed_for_device');
+  }
+  // posture/confidence 는 자세 인식 기기만 보낼 수 있다 (PIR 등은 기존과 동일 — 보내지 않음).
+  if (hasPosture && !POSTURE_DEVICE_TYPES.includes(device.type)) {
+    return fail(422, 'posture_not_allowed_for_device');
   }
   return { ok: true };
 }

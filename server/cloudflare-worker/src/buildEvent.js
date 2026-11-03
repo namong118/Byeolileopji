@@ -21,10 +21,13 @@ function sourceForEventType(eventType) {
 }
 
 /**
- * @param {{ deviceId: string, eventType: string, device: object, now?: Date }} args
+ * posture / confidence(선택)는 payload 에 덧붙인다 → 앱 CareEvent.metadata.posture / .confidence.
+ * 둘 다 없으면 payload 는 예전과 동일하다.
+ *
+ * @param {{ deviceId: string, eventType: string, device: object, now?: Date, posture?: string, confidence?: number }} args
  * @returns 평문 이벤트 객체 (occurredAt/createdAt 은 Date — firestore.js 가 timestampValue 로 변환)
  */
-export function buildEventDoc({ deviceId, eventType, device, now = new Date() }) {
+export function buildEventDoc({ deviceId, eventType, device, now = new Date(), posture, confidence }) {
   const location =
     typeof device.location === 'string' && device.location.trim() !== ''
       ? device.location
@@ -36,7 +39,12 @@ export function buildEventDoc({ deviceId, eventType, device, now = new Date() })
     eventType,
     source: sourceForEventType(eventType),
     location,
-    payload: { origin: 'esp32', deviceType: device.type ?? null },
+    payload: {
+      origin: 'esp32',
+      deviceType: device.type ?? null,
+      ...(posture !== undefined ? { posture } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
+    },
     occurredAt: now,
     createdAt: now,
   };
