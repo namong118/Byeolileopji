@@ -2845,3 +2845,28 @@ occluded 8장은 거의 같은 이미지다.
 - 채점은 스크립트로 했다. assertion 4 판정식이 처음에 "없음 (이유)" 형식을 놓쳐 스킬 없음을 잘못 실패시켰고(20%),
   판정식을 고친 뒤 재채점한 값이 위 표다.
 - 사용자 리뷰(뷰어 피드백)는 하지 않고 마무리했다 (사용자 결정).
+
+## XIAO ESP32-S3 Sense 자세 인식 센서 데모 (2026-11-03, 브랜치 `feat/xiao-posture`)
+
+### 한 일
+- CI `.github/workflows/ci.yml`: node(typecheck·lint·smoke) / python(training tests) / firmware(esp32-pir 더미 컴파일 + posture_vote g++ 테스트). xiao-posture 스케치 컴파일은 주석 자리만. **CI 자체는 아직 GitHub 에서 실행 전 (미검증)** — push 후 확인.
+- Worker: `ESP32_POSTURE` 기기 타입(`motion_detected` 만), 선택 필드 `posture`(standing|sitting|lying)·`confidence`(0~1) 검증 → `events.payload`(앱 `metadata`). 필드 없는 PIR 요청은 결과·payload 동일. PIR 기기가 posture 를 보내면 422. 새 eventType 없음.
+- 데모 격리: 데모 기기 3대(`xiao-living/kitchen/bed` = 거실/부엌/침대)는 보호대상 `zz-demo-xiao` 에 묶는다. Cron 은 `CARE_RECIPIENT_ID` 한 명만 판정·알림하므로 데모 이벤트는 판정/FCM 에 안 들어간다. ID 를 `zz-` 로 시작한 이유: 앱 `selectActiveLink()` 가 연결 여러 개면 ID 사전순 첫 번째를 고른다 — `demo-xiao` 였다면 `dev-care-recipient` 보다 앞서 기존 모바일 앱이 데모 대상으로 바뀐다.
+- `scripts/register-xiao-demo-devices.mjs`: 기기 3대 + `guardianLinks/{uid}_zz-demo-xiao` 등록. 기본 dry-run, `--apply` 일 때만 쓰기 (**미실행**).
+- 웹 데모: `react-native-web` / `react-dom` / `@expo/metro-runtime` 추가. `Platform.OS==='web'` + `EXPO_PUBLIC_DEMO_RECIPIENT_ID` 일 때만 데모 모드 — 데모 연결 선택, 데모 기기 구독, 홈 상태 영역을 데모 카드로 대체, push 등록 안 함, 폭 1024px 이상이면 폰 프레임 + 실시간 이벤트 로그 패널. 자세 문구("거실에서 앉아 있어요.")는 metadata.posture 가 있을 때만. "확인이 필요해요" 배지는 마지막 lying 이벤트 시각부터 1초 타이머로 경과 계산(침대 제외, 기본 30초) — 화면 표시 전용.
+- 웹에서 Firebase Auth 가 `getReactNativePersistence` 없음으로 죽던 것 → 웹만 `browserLocalPersistence` (모바일 동일).
+- 펌웨어 `firmware/xiao-posture/`: 카메라 핀, EI `run_classifier` 호출(include 이름 TODO), BOOT 버튼 방 순환, `posture_vote.h` 다수결(5프레임·0.6), heartbeat.
+
+### 검증
+- `npm run test:smoke` PASS (신규 `xiao-posture-smoke.mjs` 13개), `typecheck` PASS, `lint` PASS, `wrangler deploy --dry-run` 번들 PASS.
+- Python training tests 32개 OK (로컬 unittest; pytest 는 CI 에서).
+- `posture_vote_test.cpp` 31 checks PASS (Docker gcc:13).
+- `npx expo start --web`: 기동·번들 OK, 1280px 폰 프레임+로그 패널 / 800px 기존 화면 렌더 확인 (로그인 화면까지, 로그인 후 데모 화면은 **미검증**).
+- esp32-pir arduino-cli 컴파일: 로컬 arduino-cli 없음 → **미실행** (CI 에서).
+
+### 남은 일
+- Edge Impulse 라이브러리 연결: include 이름·라벨 교체 → 스케치 컴파일 → CI 컴파일 단계 주석 해제.
+- 실기기 테스트: 카메라 캡처·추론 속도·BOOT 버튼·전송 E2E, 로그인 후 웹 데모 화면(배지 30초) 확인.
+- 배포 (사용자 실행): `register-xiao-demo-devices.mjs --apply` → Worker 배포(새 eventType 없음, posture 필드 추가만) → 웹 데모 실행. 실제 보호대상 ID 가 `zz-demo-xiao` 보다 사전순 앞인지 확인.
+- GitHub Actions CI 첫 실행 결과 확인.
+- 홈페이지 반영 필요: XIAO 자세 인식 데모(실기기 미검증), smoke 테스트 수 증가.
