@@ -9,7 +9,8 @@ static const char *const ROOM_DEVICE_IDS[ROOM_COUNT] = {"xiao-living", "xiao-kit
 static const char *const ROOM_NAMES[ROOM_COUNT] = {"거실", "부엌", "침대"};
 
 // ── 자세 투표 (posture_vote.h) ──
-#define VOTE_FRAMES      5      // 최근 N프레임 다수결
+// 시리얼 "[EI] NNNms" 실측이 1초를 넘으면 5프레임 확정에 5초 이상 걸린다 → 3 으로 낮춘다.
+#define VOTE_FRAMES      5      // 최근 N프레임 다수결 (추론 >1000ms 면 3)
 #define MIN_CONFIDENCE   0.6f   // 이 미만 프레임은 투표에서 제외
 
 // ── 판단 근거 스냅샷 (데모 전용, 기본 꺼짐) ──

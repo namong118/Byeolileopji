@@ -22,9 +22,8 @@
 #include "esp_camera.h"
 #include "img_converters.h"
 
-// TODO(EI): Edge Impulse 에서 내보낸 Arduino 라이브러리의 헤더 이름으로 교체한다.
-//           (예: <별일없지_posture_inferencing.h> — 라이브러리 zip 안 src/ 의 *_inferencing.h)
-#include <xiao_posture_inferencing.h>
+// Edge Impulse Arduino 라이브러리 (lib/ei-byeolileopji-posture-arduino-1.0.1.zip)
+#include <byeolileopji-posture_inferencing.h>
 #include "edge-impulse-sdk/dsp/image/image.hpp"
 
 #include "config.h"
@@ -299,7 +298,8 @@ static int getSignalData(size_t offset, size_t length, float *out) {
   return 0;
 }
 
-// TODO(EI): 라벨 이름이 다르면 여기 문자열을 Edge Impulse 프로젝트 라벨과 맞춘다.
+// EI 라벨은 알파벳순 {lying, no_person, sitting, standing} (model_variables.h).
+// 인덱스가 아니라 이름으로 매핑하므로 순서와 무관하다.
 static Posture labelToPosture(const char *label) {
   if (strcmp(label, "standing") == 0) return POSTURE_STANDING;
   if (strcmp(label, "sitting") == 0) return POSTURE_SITTING;
@@ -332,11 +332,20 @@ bool classifyFrame(Posture *outPosture, float *outConfidence) {
   signal.get_data = &getSignalData;
 
   ei_impulse_result_t result = {};
+  unsigned long t0 = millis();
   EI_IMPULSE_ERROR err = run_classifier(&signal, &result, false);
+  unsigned long inferMs = millis() - t0;
   if (err != EI_IMPULSE_OK) {
     Serial.printf("[EI] run_classifier failed %d\n", err);
     return false;
   }
+  // 매 추론: 총 시간(ms, dsp/nn 내역) + 4개 클래스 확률. 1초 초과면 config.h VOTE_FRAMES 참고.
+  Serial.printf("[EI] %lums (dsp %d, nn %d)", inferMs, result.timing.dsp,
+                result.timing.classification);
+  for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
+    Serial.printf(" %s=%.2f", result.classification[i].label, result.classification[i].value);
+  }
+  Serial.println();
   size_t best = 0;
   for (size_t i = 1; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
     if (result.classification[i].value > result.classification[best].value) best = i;

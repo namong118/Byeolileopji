@@ -52,9 +52,8 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -I firmware/xiao-posture \
             firmware/xiao-posture/tests/posture_vote_test.cpp -o posture_vote_test
           ./posture_vote_test
-      # xiao-posture 스케치 컴파일 — Edge Impulse 라이브러리(.zip)가 레포에 들어온 뒤 켠다.
-      # - name: Compile xiao-posture (dummy secrets)
-      #   run: |
-      #     cp firmware/xiao-posture/secrets.example.h firmware/xiao-posture/secrets.h
-      #     arduino-cli lib install --zip-path <EI 라이브러리 zip 경로>   # TODO
-      #     arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi firmware/xiao-posture
+      - name: Compile xiao-posture (dummy secrets, Edge Impulse library)
+        run: |
+          cp firmware/xiao-posture/secrets.example.h firmware/xiao-posture/secrets.h
+          unzip -q firmware/xiao-posture/lib/ei-byeolileopji-posture-arduino-1.0.1.zip -d "$RUNNER_TEMP/eilib"
+          arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi --library "$RUNNER_TEMP/eilib/byeolileopji-posture_inferencing" firmware/xiao-posture
