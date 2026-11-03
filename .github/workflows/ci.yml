@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      # smoke 는 모두 fetch 를 mock 한다 — secret·네트워크 불필요.
+      - run: npm run test:smoke
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # 테스트가 import 하는 것만 설치한다 (ultralytics/torch 는 설치하지 않음).
+      - run: pip install pytest numpy opencv-python-headless pyyaml
+      - run: python -m pytest edge/vision/training/tests -q
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install esp32 core
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - name: Compile esp32-pir (dummy secrets)
+        run: |
+          cp firmware/esp32-pir/secrets.example.h firmware/esp32-pir/secrets.h
+          arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/esp32-pir
+      - name: posture_vote unit test
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -I firmware/xiao-posture \
+            firmware/xiao-posture/tests/posture_vote_test.cpp -o posture_vote_test
+          ./posture_vote_test
+      # xiao-posture 스케치 컴파일 — Edge Impulse 라이브러리(.zip)가 레포에 들어온 뒤 켠다.
+      # - name: Compile xiao-posture (dummy secrets)
+      #   run: |
+      #     cp firmware/xiao-posture/secrets.example.h firmware/xiao-posture/secrets.h
+      #     arduino-cli lib install --zip-path <EI 라이브러리 zip 경로>   # TODO
+      #     arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3:PSRAM=opi firmware/xiao-posture
